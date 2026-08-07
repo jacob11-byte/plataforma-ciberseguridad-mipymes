@@ -48,11 +48,19 @@ function render() {
       <td>${d.windows_edition || d.os_version || "Sin dato"}<div class="muted">${d.architecture || ""}</div></td>
       <td><span class="status ${d.agent_status}">${d.agent_status_label || "Sin conexion"}</span><div class="muted">${d.agent_version || "sin version"}</div></td>
       <td>${d.last_seen || "Sin contacto"}</td>
-      <td><button class="small secondary reconnect-btn" data-device-id="${escapeHtml(d.device_id)}">Reconectar</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="small secondary reconnect-btn" data-device-id="${escapeHtml(d.device_id)}">Reconectar</button>
+          <button class="small danger disconnect-btn" data-device-id="${escapeHtml(d.device_id)}">Desconectar</button>
+        </div>
+      </td>
     </tr>
   `).join("");
   document.querySelectorAll(".reconnect-btn").forEach((button) => {
     button.addEventListener("click", () => reconnectDevice(button.dataset.deviceId));
+  });
+  document.querySelectorAll(".disconnect-btn").forEach((button) => {
+    button.addEventListener("click", () => disconnectDevice(button.dataset.deviceId));
   });
 
   document.getElementById("openCount").textContent = `${openFindings.length} abiertos`;
@@ -382,6 +390,25 @@ async function reconnectDevice(deviceId) {
     <strong>Reconectar agente</strong>
     <p>${escapeHtml(data.message || "Ejecuta el comando en el equipo del agente.")}</p>
     ${commands}
+  `;
+  await loadDashboard();
+}
+
+async function disconnectDevice(deviceId) {
+  const confirmed = window.confirm("Desconectar este agente? El token quedara desactivado y se cancelaran tareas pendientes.");
+  if (!confirmed) return;
+  const notice = document.getElementById("reconnectNotice");
+  notice.hidden = false;
+  notice.innerHTML = "Desconectando agente...";
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/disconnect`, { method: "POST" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  const data = await response.json();
+  notice.innerHTML = `
+    <strong>Agente desconectado</strong>
+    <p>${escapeHtml(data.message || "El agente fue desconectado.")}</p>
   `;
   await loadDashboard();
 }

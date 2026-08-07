@@ -409,16 +409,19 @@ def agent_tasks(
         rows = db.execute(
             """
             SELECT * FROM tasks
-            WHERE device_id = ? AND status = 'pending'
+            WHERE device_id = ? AND status IN ('pending', 'delivered')
             ORDER BY created_at
             LIMIT ?
             """,
             (device_id, max_tasks),
         ).fetchall()
-        db.execute(
-            "UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE device_id=? AND status='pending'",
-            (device_id,),
-        )
+        task_ids = [row["id"] for row in rows if row["status"] == "pending"]
+        if task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            db.execute(
+                f"UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+                task_ids,
+            )
         return {"tasks": [dict(row) for row in rows]}
 
 
@@ -463,11 +466,38 @@ def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
     }
 
 
+@app.post("/api/devices/{device_id}/disconnect")
+def disconnect_device(device_id: str, request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        if not device:
+            raise HTTPException(status_code=404, detail="Equipo no existe")
+        db.execute("UPDATE agent_credentials SET active=? WHERE device_id=?", (False, device_id))
+        db.execute(
+            "UPDATE tasks SET status='canceled', completed_at=CURRENT_TIMESTAMP WHERE device_id=? AND status IN ('pending', 'delivered')",
+            (device_id,),
+        )
+    return {
+        "device_id": device_id,
+        "status": "disconnected",
+        "message": "Agente desconectado. Sus credenciales quedaron desactivadas y las tareas pendientes fueron canceladas.",
+    }
+
+
 @app.get("/api/devices/{device_id}/detail")
 def device_detail(device_id: str, request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
-        device = db.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        device = db.execute(
+            """
+            SELECT d.*,
+                EXISTS(SELECT 1 FROM agent_credentials c WHERE c.device_id=d.device_id AND c.active=?) AS credential_active
+            FROM devices d
+            WHERE d.device_id = ?
+            """,
+            (True, device_id),
+        ).fetchone()
         if not device:
             raise HTTPException(status_code=404, detail="Equipo no existe")
         device_row = device_view(dict(device))
@@ -559,7 +589,15 @@ def dashboard(request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
         evidences = [dict(row) for row in db.execute("SELECT * FROM evidences ORDER BY created_at DESC LIMIT 120")]
-        devices = [device_view(dict(row)) for row in db.execute("SELECT * FROM devices ORDER BY last_seen DESC NULLS LAST")]
+        devices = [device_view(dict(row)) for row in db.execute(
+            """
+            SELECT d.*,
+                EXISTS(SELECT 1 FROM agent_credentials c WHERE c.device_id=d.device_id AND c.active=?) AS credential_active
+            FROM devices d
+            ORDER BY last_seen DESC NULLS LAST
+            """,
+            (True,),
+        )]
         findings = [dict(row) for row in db.execute("SELECT * FROM findings ORDER BY updated_at DESC")]
         open_findings = [finding for finding in findings if finding["status"] != "resolved"]
         return {
@@ -677,9 +715,14 @@ def _int_or_none(value: Any) -> int | None:
 
 def device_view(row: dict[str, Any]) -> dict[str, Any]:
     row.pop("token", None)
+    credential_active = row.pop("credential_active", True)
     last_seen = row.get("last_seen")
     row["agent_status"] = "offline"
     row["agent_status_label"] = "Sin conexion"
+    if credential_active in {False, 0, "0"}:
+        row["agent_status"] = "disconnected"
+        row["agent_status_label"] = "Desconectado"
+        return row
     parsed = parse_timestamp(last_seen)
     if parsed and (datetime.now(timezone.utc) - parsed).total_seconds() <= AGENT_ONLINE_WINDOW_SECONDS:
         row["agent_status"] = "online"

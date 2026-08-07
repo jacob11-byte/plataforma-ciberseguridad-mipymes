@@ -248,6 +248,16 @@ function escapeHtml(value) {
 }
 
 document.getElementById("refreshBtn").addEventListener("click", loadDetail);
+document.getElementById("disconnectBtn").addEventListener("click", async () => {
+  const confirmed = window.confirm("Desconectar este agente? El token quedara desactivado y se cancelaran tareas pendientes.");
+  if (!confirmed) return;
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceIdFromPath())}/disconnect`, { method: "POST" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  await loadDetail();
+});
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
   window.location.href = "/login";

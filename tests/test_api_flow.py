@@ -165,6 +165,30 @@ class ApiFlowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(response.json()["tasks"]), 5)
 
+    def test_disconnect_device_disables_agent_token_and_cancels_pending_tasks(self):
+        registered = self.register_agent()
+        self.login()
+        task = self.client.post(
+            "/api/tasks",
+            json={"device_id": registered["device_id"], "task_type": "VERIFY_FIREWALL", "parameters": {}},
+        )
+        self.assertEqual(task.status_code, 200, task.text)
+        disconnected = self.client.post(f"/api/devices/{registered['device_id']}/disconnect")
+        self.assertEqual(disconnected.status_code, 200, disconnected.text)
+
+        heartbeat = self.client.post(
+            "/api/agent/heartbeat",
+            headers=self.auth_header(registered["token"]),
+            json={"device_id": registered["device_id"], "agent_version": "0.2.0"},
+        )
+        self.assertEqual(heartbeat.status_code, 403)
+
+        detail = self.client.get(f"/api/devices/{registered['device_id']}/detail")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        data = detail.json()
+        self.assertEqual(data["device"]["agent_status"], "disconnected")
+        self.assertEqual(data["tasks"][0]["status"], "canceled")
+
 
 if __name__ == "__main__":
     unittest.main()
