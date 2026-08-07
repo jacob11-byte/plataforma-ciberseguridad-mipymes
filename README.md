@@ -9,6 +9,7 @@ Prototipo funcional para detectar configuraciones inseguras en equipos Windows a
 - Motor de reglas para cortafuegos, RDP, servicios, administradores, actualizaciones, antivirus y respaldos.
 - Panel web para equipos, hallazgos, evidencias, tareas de verificacion y reportes.
 - Agente Python para Windows con tareas cerradas: `FULL_SCAN`, `VERIFY_FIREWALL`, `VERIFY_PORTS`, `VERIFY_SERVICES`, `VERIFY_ADMINISTRATORS`, `VERIFY_UPDATES`, `VERIFY_ANTIVIRUS`, `VERIFY_DEVICES`, `VERIFY_BACKUP`.
+- Base V2.1 incremental: modulos de agente, inventario avanzado, controles de seguridad, software instalado, procesos con metadata segura, eventos de seguridad permitidos, snapshots y cambios historicos.
 
 ## Instalacion
 
@@ -108,4 +109,13 @@ py -3.12 -m unittest discover -s tests
 
 ## Alcance de seguridad
 
-El agente no ejecuta comandos libres enviados por la API. Solo corre funciones locales predefinidas, no lee documentos personales, no captura credenciales, no toma capturas de pantalla y no inspecciona comunicaciones.
+El agente no ejecuta comandos libres enviados por la API. Solo corre funciones locales predefinidas, no lee documentos personales, no captura credenciales, no toma capturas de pantalla, no registra teclas, no lee correos y no inspecciona comunicaciones.
+
+Los modulos V2.1 recopilan solo telemetria tecnica autorizada del endpoint:
+
+- inventario de sistema;
+- TPM, Secure Boot, BitLocker, UAC, SMBv1 y RDP;
+- software instalado;
+- procesos activos con nombre, ruta, firma y metadata tecnica, sin argumentos de linea de comandos;
+- eventos permitidos del registro de seguridad de Windows;
+- snapshots y cambios entre snapshots.

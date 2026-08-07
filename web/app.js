@@ -51,6 +51,7 @@ function render() {
       <td>
         <div class="row-actions">
           <button class="small secondary reconnect-btn" data-device-id="${escapeHtml(d.device_id)}">Reconectar</button>
+          <button class="small secondary reactivate-btn" data-device-id="${escapeHtml(d.device_id)}">Reactivar</button>
           <button class="small danger disconnect-btn" data-device-id="${escapeHtml(d.device_id)}">Desconectar</button>
         </div>
       </td>
@@ -61,6 +62,9 @@ function render() {
   });
   document.querySelectorAll(".disconnect-btn").forEach((button) => {
     button.addEventListener("click", () => disconnectDevice(button.dataset.deviceId));
+  });
+  document.querySelectorAll(".reactivate-btn").forEach((button) => {
+    button.addEventListener("click", () => reactivateDevice(button.dataset.deviceId));
   });
 
   document.getElementById("openCount").textContent = `${openFindings.length} abiertos`;
@@ -409,6 +413,23 @@ async function disconnectDevice(deviceId) {
   notice.innerHTML = `
     <strong>Agente desconectado</strong>
     <p>${escapeHtml(data.message || "El agente fue desconectado.")}</p>
+  `;
+  await loadDashboard();
+}
+
+async function reactivateDevice(deviceId) {
+  const notice = document.getElementById("reconnectNotice");
+  notice.hidden = false;
+  notice.innerHTML = "Reactivando agente...";
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/reactivate`, { method: "POST" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  const data = await response.json();
+  notice.innerHTML = `
+    <strong>Agente reactivado</strong>
+    <p>${escapeHtml(data.message || "El agente fue reactivado.")}</p>
   `;
   await loadDashboard();
 }

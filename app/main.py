@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import hmac
 import json
@@ -28,6 +29,11 @@ ALLOWED_TASKS = {
     "VERIFY_ANTIVIRUS",
     "VERIFY_DEVICES",
     "VERIFY_BACKUP",
+    "V2_SNAPSHOT",
+    "VERIFY_SECURITY_CONTROLS",
+    "VERIFY_SOFTWARE",
+    "VERIFY_PROCESSES",
+    "VERIFY_EVENTLOG",
 }
 
 CONTROL_TABS = {
@@ -41,6 +47,11 @@ CONTROL_TABS = {
     "threats": "Amenazas",
     "backup": "Backups",
     "connected_devices": "Dispositivos",
+    "system_inventory_v2": "Inventario",
+    "security_controls": "Controles",
+    "software_inventory": "Software",
+    "process_inventory": "Procesos",
+    "security_eventlog": "Event Log",
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -332,6 +343,7 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                 "INSERT INTO evidences(scan_id, device_id, control, result_json) VALUES (?, ?, ?, ?)",
                 (scan_id, payload.device_id, f"status_{control}", json_dumps(value)),
             )
+        maybe_store_snapshot(db, payload.device_id, scan_id, payload.evidence)
         for result in rule_results:
             db.execute(
                 "INSERT INTO evidences(scan_id, device_id, control, result_json) VALUES (?, ?, ?, ?)",
@@ -485,6 +497,21 @@ def disconnect_device(device_id: str, request: Request) -> dict[str, Any]:
     }
 
 
+@app.post("/api/devices/{device_id}/reactivate")
+def reactivate_device(device_id: str, request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        if not device:
+            raise HTTPException(status_code=404, detail="Equipo no existe")
+        db.execute("UPDATE agent_credentials SET active=? WHERE device_id=?", (True, device_id))
+    return {
+        "device_id": device_id,
+        "status": "active",
+        "message": "Agente reactivado. El token existente puede volver a enviar heartbeat y evidencia.",
+    }
+
+
 @app.get("/api/devices/{device_id}/detail")
 def device_detail(device_id: str, request: Request) -> dict[str, Any]:
     _require_user(request)
@@ -523,6 +550,14 @@ def device_detail(device_id: str, request: Request) -> dict[str, Any]:
             "SELECT * FROM findings WHERE device_id=? ORDER BY updated_at DESC",
             (device_id,),
         ).fetchall()]
+        snapshots = [dict(row) for row in db.execute(
+            "SELECT * FROM inventory_snapshots WHERE device_id=? ORDER BY created_at DESC LIMIT 20",
+            (device_id,),
+        ).fetchall()]
+        diffs = [dict(row) for row in db.execute(
+            "SELECT * FROM snapshot_diffs WHERE device_id=? ORDER BY created_at DESC LIMIT 20",
+            (device_id,),
+        ).fetchall()]
         finding_ids = [finding["id"] for finding in findings]
         history = []
         if finding_ids:
@@ -559,6 +594,8 @@ def device_detail(device_id: str, request: Request) -> dict[str, Any]:
         "findings": findings,
         "evidences": evidences,
         "history": history,
+        "snapshots": snapshots,
+        "diffs": diffs,
     }
 
 
@@ -650,6 +687,98 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
     return controls
 
 
+def maybe_store_snapshot(db: Any, device_id: str, scan_id: int, evidence: dict[str, Any]) -> None:
+    snapshot = snapshot_from_evidence(evidence)
+    if not snapshot:
+        return
+    snapshot_hash = hashlib.sha256(json_dumps(snapshot).encode("utf-8")).hexdigest()
+    previous = db.execute(
+        "SELECT * FROM inventory_snapshots WHERE device_id=? ORDER BY created_at DESC LIMIT 1",
+        (device_id,),
+    ).fetchone()
+    current_id = insert_returning_id(
+        db,
+        """
+        INSERT INTO inventory_snapshots(device_id, scan_id, snapshot_type, snapshot_json, hash)
+        VALUES (?, ?, 'endpoint', ?, ?)
+        """,
+        (device_id, scan_id, json_dumps(snapshot), snapshot_hash),
+    )
+    if previous:
+        previous_data = json_loads(previous["snapshot_json"])
+        diff = diff_snapshots(previous_data, snapshot)
+        if diff["summary"]["total_changes"] > 0:
+            db.execute(
+                """
+                INSERT INTO snapshot_diffs(device_id, previous_snapshot_id, current_snapshot_id, diff_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (device_id, previous["id"], current_id, json_dumps(diff)),
+            )
+
+
+def snapshot_from_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "system_info",
+        "system_inventory_v2",
+        "security_controls",
+        "software_inventory",
+        "process_inventory",
+        "security_eventlog",
+        "firewall",
+        "updates",
+        "antivirus",
+        "connected_devices",
+    ]
+    return {key: evidence[key] for key in keys if key in evidence}
+
+
+def diff_snapshots(previous: Any, current: Any) -> dict[str, Any]:
+    changes: list[dict[str, Any]] = []
+
+    def walk(path: str, before: Any, after: Any) -> None:
+        if type(before) is not type(after):
+            changes.append({"path": path, "change": "changed", "before": summarize_value(before), "after": summarize_value(after)})
+            return
+        if isinstance(before, dict):
+            for key in sorted(set(before) | set(after)):
+                next_path = f"{path}.{key}" if path else str(key)
+                if key not in before:
+                    changes.append({"path": next_path, "change": "added", "after": summarize_value(after[key])})
+                elif key not in after:
+                    changes.append({"path": next_path, "change": "removed", "before": summarize_value(before[key])})
+                else:
+                    walk(next_path, before[key], after[key])
+            return
+        if isinstance(before, list):
+            before_hash = hashlib.sha256(json_dumps(before).encode("utf-8")).hexdigest()
+            after_hash = hashlib.sha256(json_dumps(after).encode("utf-8")).hexdigest()
+            if before_hash != after_hash:
+                changes.append({"path": path, "change": "changed", "before": f"{len(before)} items", "after": f"{len(after)} items"})
+            return
+        if before != after:
+            changes.append({"path": path, "change": "changed", "before": summarize_value(before), "after": summarize_value(after)})
+
+    walk("", previous or {}, current or {})
+    return {
+        "summary": {
+            "total_changes": len(changes),
+            "added": len([item for item in changes if item["change"] == "added"]),
+            "removed": len([item for item in changes if item["change"] == "removed"]),
+            "changed": len([item for item in changes if item["change"] == "changed"]),
+        },
+        "changes": changes[:300],
+    }
+
+
+def summarize_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return f"{len(value)} items"
+    if isinstance(value, dict):
+        return f"{len(value)} keys"
+    return value
+
+
 def build_control_matrix(controls: dict[str, Any], findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     open_controls = {
         finding["control"]
@@ -674,6 +803,8 @@ def build_control_matrix(controls: dict[str, Any], findings: list[dict[str, Any]
 
 def control_status(control: str, data: Any, open_controls: set[str]) -> str:
     if data is None:
+        return "NOT_AVAILABLE"
+    if isinstance(data, dict) and data.get("success") is False:
         return "NOT_AVAILABLE"
     if isinstance(data, dict) and data.get("status") == "not_supported":
         return "NOT_AVAILABLE"
@@ -735,7 +866,18 @@ def status_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     for key in ("timestamp", "agent_version", "system_info", "scan_metadata"):
         if key in evidence:
             controls[key] = evidence[key]
-    for key in ("firewall", "updates", "antivirus", "backup", "connected_devices"):
+    for key in (
+        "firewall",
+        "updates",
+        "antivirus",
+        "backup",
+        "connected_devices",
+        "system_inventory_v2",
+        "security_controls",
+        "software_inventory",
+        "process_inventory",
+        "security_eventlog",
+    ):
         if key in evidence:
             controls[key] = evidence[key]
     if "listening_ports" in evidence:

@@ -189,6 +189,51 @@ class ApiFlowTest(unittest.TestCase):
         self.assertEqual(data["device"]["agent_status"], "disconnected")
         self.assertEqual(data["tasks"][0]["status"], "canceled")
 
+        reactivated = self.client.post(f"/api/devices/{registered['device_id']}/reactivate")
+        self.assertEqual(reactivated.status_code, 200, reactivated.text)
+        heartbeat = self.client.post(
+            "/api/agent/heartbeat",
+            headers=self.auth_header(registered["token"]),
+            json={"device_id": registered["device_id"], "agent_version": "0.2.0"},
+        )
+        self.assertEqual(heartbeat.status_code, 200, heartbeat.text)
+
+    def test_v2_snapshot_and_diff_are_persisted(self):
+        registered = self.register_agent()
+        base = {
+            "system_info": {"hostname": "DESKTOP-REAL", "windows_edition": "Windows 10 Pro", "architecture": "AMD64"},
+            "system_inventory_v2": {"success": True, "data": {"hostname": "DESKTOP-REAL", "model": "Model A"}, "error": None, "duration_ms": 10, "collected_at": "2026-08-07T00:00:00+00:00"},
+            "security_controls": {"success": True, "data": {"secure_boot": True}, "error": None, "duration_ms": 10, "collected_at": "2026-08-07T00:00:00+00:00"},
+            "scan_metadata": {"duration_ms": 20, "modules_success": 2, "modules_error": 0, "modules": []},
+        }
+        changed = {
+            **base,
+            "system_inventory_v2": {"success": True, "data": {"hostname": "DESKTOP-REAL", "model": "Model B"}, "error": None, "duration_ms": 10, "collected_at": "2026-08-07T00:01:00+00:00"},
+        }
+        for evidence in [base, changed]:
+            response = self.client.post(
+                "/api/agent/results",
+                headers=self.auth_header(registered["token"]),
+                json={"device_id": registered["device_id"], "scan_type": "V2_SNAPSHOT", "evidence": evidence},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+        self.login()
+        detail = self.client.get(f"/api/devices/{registered['device_id']}/detail")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        data = detail.json()
+        self.assertEqual(len(data["snapshots"]), 2)
+        self.assertEqual(len(data["diffs"]), 1)
+        self.assertIn("system_inventory_v2", data["controls"])
+
+    def test_v2_tasks_are_whitelisted(self):
+        registered = self.register_agent()
+        self.login()
+        response = self.client.post(
+            "/api/tasks",
+            json={"device_id": registered["device_id"], "task_type": "V2_SNAPSHOT", "parameters": {}},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,9 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
-import socket
-import subprocess
 import sys
 import time
 import urllib.error
@@ -14,6 +11,17 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from agent.core.modules import run_module
+from agent.core.powershell import run_powershell
+from agent.modules.eventlog import collect_security_events
+from agent.modules.process_inventory import collect_processes
+from agent.modules.security_controls import collect_security_controls
+from agent.modules.software_inventory import collect_installed_software
+from agent.modules.system_inventory import collect_system_inventory
 
 AGENT_VERSION = "0.2.0"
 
@@ -27,39 +35,22 @@ ALLOWED_TASKS = {
     "VERIFY_ANTIVIRUS",
     "VERIFY_DEVICES",
     "VERIFY_BACKUP",
+    "V2_SNAPSHOT",
+    "VERIFY_SECURITY_CONTROLS",
+    "VERIFY_SOFTWARE",
+    "VERIFY_PROCESSES",
+    "VERIFY_EVENTLOG",
 }
 
 
-def run_powershell(script: str) -> Any:
-    completed = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        capture_output=True,
-        text=True,
-        timeout=45,
-    )
-    if completed.returncode != 0:
-        return {"error": completed.stderr.strip()}
-    output = completed.stdout.strip()
-    if not output:
-        return None
-    try:
-        return json.loads(output)
-    except json.JSONDecodeError:
-        return output
-
-
 def system_info() -> dict[str, Any]:
-    ip_address = None
-    try:
-        ip_address = socket.gethostbyname(socket.gethostname())
-    except OSError:
-        ip_address = None
+    inventory = collect_system_inventory()
     return {
-        "hostname": socket.gethostname(),
-        "ip_address": ip_address,
-        "os_version": platform.platform(),
-        "windows_edition": windows_edition(),
-        "architecture": platform.machine(),
+        "hostname": inventory.get("hostname"),
+        "ip_address": inventory.get("ip_address"),
+        "os_version": inventory.get("os_version"),
+        "windows_edition": inventory.get("windows_edition"),
+        "architecture": inventory.get("architecture"),
     }
 
 
@@ -334,7 +325,7 @@ def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
         try:
             result = collector()
             evidence[target_key] = result
-            has_error = isinstance(result, dict) and bool(result.get("error"))
+            has_error = isinstance(result, dict) and (bool(result.get("error")) or result.get("success") is False)
             module_status.append(
                 {
                     "module": name,
@@ -370,6 +361,20 @@ def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
         collect_module("connected_devices", "connected_devices", collect_connected_devices)
     if task_type in {"FULL_SCAN", "VERIFY_BACKUP"}:
         collect_module("backup", "backup", lambda: collect_backup(config.get("backup_path", "C:\\Backups")))
+    if task_type in {"V2_SNAPSHOT", "FULL_SCAN"}:
+        collect_module("system_inventory_v2", "system_inventory_v2", lambda: run_module(collect_system_inventory).to_dict())
+        collect_module("security_controls", "security_controls", lambda: run_module(collect_security_controls).to_dict())
+        collect_module("software_inventory", "software_inventory", lambda: run_module(collect_installed_software).to_dict())
+        collect_module("process_inventory", "process_inventory", lambda: run_module(collect_processes).to_dict())
+        collect_module("security_eventlog", "security_eventlog", lambda: run_module(collect_security_events).to_dict())
+    if task_type == "VERIFY_SECURITY_CONTROLS":
+        collect_module("security_controls", "security_controls", lambda: run_module(collect_security_controls).to_dict())
+    if task_type == "VERIFY_SOFTWARE":
+        collect_module("software_inventory", "software_inventory", lambda: run_module(collect_installed_software).to_dict())
+    if task_type == "VERIFY_PROCESSES":
+        collect_module("process_inventory", "process_inventory", lambda: run_module(collect_processes).to_dict())
+    if task_type == "VERIFY_EVENTLOG":
+        collect_module("security_eventlog", "security_eventlog", lambda: run_module(collect_security_events).to_dict())
     evidence["scan_metadata"] = {
         "duration_ms": int((time.perf_counter() - started) * 1000),
         "modules_success": sum(1 for item in module_status if item["status"] == "ok"),

@@ -3,6 +3,7 @@ const state = { detail: null, tab: "resumen" };
 const tabs = [
   ["resumen", "Resumen"],
   ["sistema", "Sistema"],
+  ["inventario", "Inventario"],
   ["firewall", "Firewall"],
   ["puertos", "Puertos"],
   ["servicios", "Servicios"],
@@ -12,6 +13,10 @@ const tabs = [
   ["amenazas", "Amenazas"],
   ["backups", "Backups"],
   ["dispositivos", "Dispositivos"],
+  ["software", "Software"],
+  ["procesos", "Procesos"],
+  ["eventlog", "Event Log"],
+  ["cambios", "Cambios"],
   ["hallazgos", "Hallazgos"],
   ["evidencias", "Evidencias"],
   ["historial", "Historial"],
@@ -73,6 +78,7 @@ function renderTab() {
   const data = state.detail;
   if (state.tab === "resumen") return renderSummary(data);
   if (state.tab === "sistema") return renderObject("Sistema", controlData("system_info"));
+  if (state.tab === "inventario") return renderModuleObject("Inventario avanzado", controlData("system_inventory_v2"));
   if (state.tab === "firewall") return renderObject("Firewall", controlData("firewall"));
   if (state.tab === "puertos") return renderPorts(controlData("ports"));
   if (state.tab === "servicios") return renderServices(controlData("services"));
@@ -82,6 +88,10 @@ function renderTab() {
   if (state.tab === "amenazas") return renderThreats(controlData("threats"));
   if (state.tab === "backups") return renderObject("Backups", controlData("backup"));
   if (state.tab === "dispositivos") return renderDevices(controlData("connected_devices"));
+  if (state.tab === "software") return renderModuleTable("Software instalado", controlData("software_inventory"), ["name", "version", "publisher", "install_date"]);
+  if (state.tab === "procesos") return renderModuleTable("Procesos activos", controlData("process_inventory"), ["process_id", "name", "signature_status", "signer", "executable_path"]);
+  if (state.tab === "eventlog") return renderModuleTable("Eventos de seguridad permitidos", controlData("security_eventlog"), ["time_created", "event_id", "provider", "level", "machine"]);
+  if (state.tab === "cambios") return renderDiffs(data.diffs);
   if (state.tab === "hallazgos") return renderFindings(data.findings);
   if (state.tab === "evidencias") return renderEvidences(data.evidences);
   if (state.tab === "historial") return renderHistory(data.history);
@@ -115,6 +125,44 @@ function renderSummary(data) {
 function renderObject(title, data) {
   if (!data) return noEvaluado(title);
   return `<h2>${escapeHtml(title)}</h2>${keyValueTable(data)}`;
+}
+
+function renderModuleObject(title, moduleResult) {
+  if (!moduleResult) return noEvaluado(title);
+  const data = unwrapModule(moduleResult);
+  return `
+    <h2>${escapeHtml(title)}</h2>
+    ${moduleHeader(moduleResult)}
+    ${data ? keyValueTable(data) : noEvaluado()}
+  `;
+}
+
+function renderModuleTable(title, moduleResult, columns) {
+  if (!moduleResult) return noEvaluado(title);
+  const rows = unwrapModule(moduleResult);
+  return `
+    <h2>${escapeHtml(title)}</h2>
+    ${moduleHeader(moduleResult)}
+    ${Array.isArray(rows) && rows.length ? table(columns, rows) : `<p class="muted">No evaluado o sin registros.</p>`}
+  `;
+}
+
+function moduleHeader(moduleResult) {
+  if (!moduleResult || !Object.prototype.hasOwnProperty.call(moduleResult, "success")) return "";
+  return `
+    <div class="module-header">
+      <span class="state ${moduleResult.success ? "PASS" : "FAIL"}">${moduleResult.success ? "OK" : "ERROR"}</span>
+      <span class="muted">${escapeHtml(moduleResult.collected_at || "Sin fecha")} - ${escapeHtml(formatDuration(moduleResult.duration_ms))}</span>
+      ${moduleResult.error ? `<span class="error">${escapeHtml(moduleResult.error)}</span>` : ""}
+    </div>
+  `;
+}
+
+function unwrapModule(moduleResult) {
+  if (moduleResult && Object.prototype.hasOwnProperty.call(moduleResult, "data")) {
+    return moduleResult.data;
+  }
+  return moduleResult;
 }
 
 function renderPorts(rows) {
@@ -190,6 +238,20 @@ function renderHistory(rows) {
   `).join("") : `<p class="muted">Sin historial.</p>`;
 }
 
+function renderDiffs(rows) {
+  return rows.length ? rows.map((row) => {
+    const diff = parseJson(row.diff_json);
+    const changes = diff.changes || [];
+    return `
+      <article class="status-card medium">
+        <strong>Snapshot ${escapeHtml(row.previous_snapshot_id)} -> ${escapeHtml(row.current_snapshot_id)}</strong>
+        <p>${escapeHtml(row.created_at)} - ${escapeHtml(diff.summary?.total_changes ?? 0)} cambios</p>
+        ${changes.length ? table(["path", "change", "before", "after"], changes.slice(0, 50)) : `<p class="muted">Sin cambios.</p>`}
+      </article>
+    `;
+  }).join("") : `<p class="muted">Sin cambios entre snapshots.</p>`;
+}
+
 function keyValueTable(data) {
   return `<div class="table-wrap"><table><tbody>${Object.entries(data).map(([key, value]) => `
     <tr><th>${escapeHtml(key)}</th><td>${escapeHtml(formatValue(value))}</td></tr>
@@ -248,6 +310,14 @@ function escapeHtml(value) {
 }
 
 document.getElementById("refreshBtn").addEventListener("click", loadDetail);
+document.getElementById("reactivateBtn").addEventListener("click", async () => {
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceIdFromPath())}/reactivate`, { method: "POST" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  await loadDetail();
+});
 document.getElementById("disconnectBtn").addEventListener("click", async () => {
   const confirmed = window.confirm("Desconectar este agente? El token quedara desactivado y se cancelaran tareas pendientes.");
   if (!confirmed) return;
