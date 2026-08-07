@@ -303,7 +303,12 @@ def agent_tasks(device_id: str, authorization: str | None = Header(default=None)
     _device_for_token(device_id, authorization)
     with connect() as db:
         rows = db.execute(
-            "SELECT * FROM tasks WHERE device_id = ? AND status = 'pending' ORDER BY created_at",
+            """
+            SELECT * FROM tasks
+            WHERE device_id = ? AND status IN ('pending', 'delivered')
+            ORDER BY created_at
+            LIMIT 3
+            """,
             (device_id,),
         ).fetchall()
         db.execute(
@@ -332,7 +337,6 @@ def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
 
 @app.post("/api/agent/tasks/{task_id}/complete")
 def complete_task(task_id: int, request: Request, authorization: str | None = Header(default=None)) -> dict[str, str]:
-    body = None
     with connect() as db:
         task = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if not task:
@@ -340,6 +344,17 @@ def complete_task(task_id: int, request: Request, authorization: str | None = He
         _device_for_token(task["device_id"], authorization)
         db.execute("UPDATE tasks SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
         return {"status": "completed"}
+
+
+@app.post("/api/agent/tasks/{task_id}/fail")
+def fail_task(task_id: int, authorization: str | None = Header(default=None)) -> dict[str, str]:
+    with connect() as db:
+        task = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="Tarea no existe")
+        _device_for_token(task["device_id"], authorization)
+        db.execute("UPDATE tasks SET status='failed', completed_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
+        return {"status": "failed"}
 
 
 @app.get("/api/dashboard")

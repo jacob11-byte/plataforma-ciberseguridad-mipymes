@@ -64,6 +64,14 @@ function render() {
   document.getElementById("history").innerHTML = history.map((h) => `
     <div class="event"><strong>${h.previous_status || "nuevo"} -> ${h.new_status}</strong><div>${h.note}</div><div class="muted">${h.created_at}</div></div>
   `).join("") || `<p class="muted">Sin cambios de estado.</p>`;
+
+  document.getElementById("tasks").innerHTML = tasks.map((t) => `
+    <div class="event">
+      <strong>${t.task_type}</strong> en ${t.device_id}
+      <div><span class="badge ${t.status}">${t.status}</span></div>
+      <div class="muted">${t.created_at}</div>
+    </div>
+  `).join("") || `<p class="muted">Sin tareas solicitadas.</p>`;
 }
 
 function latestEvidenceByDeviceAndControl(evidences) {
@@ -120,6 +128,7 @@ document.getElementById("taskForm").addEventListener("submit", async (event) => 
     }),
   });
   await loadDashboard();
+  alert("Tarea creada. Para ejecutarla, el agente debe estar corriendo en tu computadora con --poll-once o --loop.");
 });
 
 ensureSession().then((ok) => {

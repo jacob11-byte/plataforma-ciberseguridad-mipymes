@@ -135,6 +135,9 @@ th { color: #526179; font-size: 12px; text-transform: uppercase; }
 .badge { border-radius: 999px; padding: 4px 8px; font-size: 12px; font-weight: 700; }
 .open, .reopened { background: #ffe8d6; color: #8a3d00; }
 .resolved { background: #dff7ea; color: #146b3a; }
+.pending, .delivered { background: #dceeff; color: #155b89; }
+.completed { background: #dff7ea; color: #146b3a; }
+.failed { background: #ffd9de; color: #9b1128; }
 .Critico { background: #ffd9de; color: #9b1128; }
 .Alto { background: #fff0c2; color: #744b00; }
 .Medio { background: #dceeff; color: #155b89; }

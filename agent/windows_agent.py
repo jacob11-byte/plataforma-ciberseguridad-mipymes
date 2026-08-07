@@ -7,6 +7,7 @@ import platform
 import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -269,12 +270,31 @@ def send_scan(config: dict[str, Any], task_type: str) -> dict[str, Any]:
     )
 
 
-def poll_once(config: dict[str, Any]) -> None:
+def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
     url = f"{config['api_url'].rstrip('/')}/api/agent/tasks?device_id={urllib.parse.quote(config['device_id'])}"
-    tasks = request_json("GET", url, config["token"]).get("tasks", [])
+    tasks = request_json("GET", url, config["token"]).get("tasks", [])[:max_tasks]
+    if not tasks:
+        print("No hay tareas pendientes.")
+        return
     for task in tasks:
-        send_scan(config, task["task_type"])
-        request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
+        try:
+            print(f"Ejecutando tarea {task['id']}: {task['task_type']}")
+            send_scan(config, task["task_type"])
+            request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
+            print(f"Tarea {task['id']} completada.")
+        except Exception as exc:
+            print(f"Tarea {task['id']} fallo: {exc}", file=sys.stderr)
+            try:
+                request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/fail", config["token"], {})
+            except Exception:
+                pass
+
+
+def poll_loop(config: dict[str, Any], interval_seconds: int, max_tasks: int) -> None:
+    print(f"Agente activo. Consultando tareas cada {interval_seconds} segundos.")
+    while True:
+        poll_once(config, max_tasks=max_tasks)
+        time.sleep(interval_seconds)
 
 
 def main() -> int:
@@ -282,6 +302,9 @@ def main() -> int:
     parser.add_argument("--config", default="agent/agent_config.example.json")
     parser.add_argument("--scan", choices=sorted(ALLOWED_TASKS))
     parser.add_argument("--poll-once", action="store_true")
+    parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--interval", type=int, default=60)
+    parser.add_argument("--max-tasks", type=int, default=3)
     parser.add_argument("--register", action="store_true")
     args = parser.parse_args()
     config_path = Path(args.config)
@@ -291,8 +314,10 @@ def main() -> int:
             result = register_device(config)
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
             print(json.dumps(result, indent=2))
+        elif args.loop:
+            poll_loop(config, interval_seconds=args.interval, max_tasks=args.max_tasks)
         elif args.poll_once:
-            poll_once(config)
+            poll_once(config, max_tasks=args.max_tasks)
         else:
             print(json.dumps(send_scan(config, args.scan or "FULL_SCAN"), indent=2))
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
