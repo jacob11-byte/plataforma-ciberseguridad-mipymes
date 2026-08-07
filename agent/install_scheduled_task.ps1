@@ -1,5 +1,5 @@
 param(
-    [string]$ConfigPath = "C:\pg2\agent\agent_config.render.example.json",
+    [string]$ConfigPath = "C:\pg2\agent\agent_config.render.json",
     [string]$PythonExe = "",
     [string]$TaskName = "CyberCheck MIPYME Agent",
     [int]$IntervalMinutes = 15,
