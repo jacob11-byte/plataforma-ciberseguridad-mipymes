@@ -58,6 +58,7 @@ function render() {
         <span class="badge ${f.status}">${f.status}</span>
       </div>
       <div><span class="badge ${f.severity}">${f.severity}</span> <span class="muted">${f.control}</span></div>
+      ${renderFindingExplanation(f, latestEvidence[`${f.device_id}:${f.control}`])}
       <p>${f.recommendation}</p>
       <p class="muted">Cierre: ${f.closure_criteria}</p>
       ${renderEvidence(latestEvidence[`${f.device_id}:${f.control}`])}
@@ -107,6 +108,106 @@ function renderEvidence(evidence) {
       <pre>${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>
     </details>
   `;
+}
+
+function parseEvidence(evidence) {
+  if (!evidence) {
+    return {};
+  }
+  try {
+    return JSON.parse(evidence.result_json);
+  } catch (_error) {
+    return {};
+  }
+}
+
+function renderFindingExplanation(finding, evidence) {
+  const data = parseEvidence(evidence);
+  const content = findingNarrative(finding, data);
+  return `
+    <div class="finding-explanation">
+      <div><strong>Encontrado:</strong> ${escapeHtml(content.found)}</div>
+      <div><strong>Que hacer:</strong> ${escapeHtml(content.action)}</div>
+    </div>
+  `;
+}
+
+function findingNarrative(finding, data) {
+  const rule = finding.rule_id;
+  if (rule === "UNAUTHORIZED_LOCAL_ADMIN") {
+    const accounts = (data.unauthorized_accounts || []).join(", ") || "cuentas no autorizadas";
+    return {
+      found: `El grupo Administradores contiene: ${accounts}.`,
+      action: "Abre Administracion de equipos > Usuarios y grupos locales > Grupos > Administradores, y retira las cuentas que no deban tener privilegios.",
+    };
+  }
+  if (rule === "UPDATES_PENDING") {
+    const count = data.pending_count ?? "desconocido";
+    const reboot = data.reboot_pending ? "Tambien hay reinicio pendiente." : "No se reporto reinicio pendiente.";
+    return {
+      found: `Windows reporta ${count} actualizaciones pendientes. ${reboot}`,
+      action: "Abre Configuracion > Windows Update, instala actualizaciones y reinicia si Windows lo solicita.",
+    };
+  }
+  if (rule === "BACKUP_OLD_OR_MISSING") {
+    if (data.exists === false) {
+      return {
+        found: "No se encontro un respaldo valido en la ruta configurada.",
+        action: "Configura una carpeta real de respaldos en el agente o ejecuta un respaldo reciente en la ruta configurada.",
+      };
+    }
+    return {
+      found: `El ultimo respaldo tiene ${data.days_since_last_backup ?? "edad desconocida"} dias.`,
+      action: "Ejecuta un respaldo nuevo y vuelve a solicitar VERIFY_BACKUP.",
+    };
+  }
+  if (rule === "FIREWALL_PUBLIC_DISABLED") {
+    return {
+      found: `El perfil Public del firewall esta ${data.public ? "activo" : "desactivado"}.`,
+      action: "Abre Seguridad de Windows > Firewall y proteccion de red, activa el perfil Publico y solicita VERIFY_FIREWALL.",
+    };
+  }
+  if (rule === "RDP_EXPOSED") {
+    return {
+      found: `Puerto 3389 escuchando: ${data.port_3389_listening ? "si" : "no"}. Servicio RDP activo: ${data.termservice_running ? "si" : "no"}.`,
+      action: "Desactiva Escritorio remoto si no se usa o restringe el acceso desde el firewall.",
+    };
+  }
+  if (rule === "RISKY_SERVICE_ENABLED") {
+    const services = (data.services || []).map((service) => service.name).join(", ") || "servicios remotos";
+    return {
+      found: `Servicios de riesgo activos: ${services}.`,
+      action: "Deten o deshabilita servicios remotos que no sean necesarios.",
+    };
+  }
+  if (rule === "ANTIVIRUS_DISABLED") {
+    return {
+      found: `Antivirus activo: ${data.enabled}. Proteccion en tiempo real: ${data.real_time}.`,
+      action: "Abre Seguridad de Windows y activa Proteccion contra virus y amenazas.",
+    };
+  }
+  if (rule === "ANTIVIRUS_SIGNATURES_OLD") {
+    return {
+      found: `Firmas con ${data.signature_age_days ?? "edad desconocida"} dias.`,
+      action: "Actualiza las firmas desde Seguridad de Windows o Windows Update.",
+    };
+  }
+  if (rule === "ANTIVIRUS_SCAN_OLD") {
+    return {
+      found: `Ultimo escaneo rapido hace ${data.quick_scan_age_days ?? "tiempo desconocido"} dias.`,
+      action: "Ejecuta un analisis rapido o completo y solicita VERIFY_ANTIVIRUS.",
+    };
+  }
+  if (rule === "ANTIVIRUS_ACTIVE_THREATS") {
+    return {
+      found: `Amenazas activas reportadas: ${data.active_threat_count ?? 0}.`,
+      action: "Aplica la accion recomendada por Windows Defender y vuelve a verificar.",
+    };
+  }
+  return {
+    found: "El motor de reglas encontro una condicion insegura en la evidencia enviada por el agente.",
+    action: finding.recommendation,
+  };
 }
 
 function escapeHtml(value) {

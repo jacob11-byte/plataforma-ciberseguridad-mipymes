@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 data/*.db
 data/*.db-*
+agent/agent_config.render.json
