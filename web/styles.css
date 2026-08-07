@@ -9,15 +9,19 @@
   --panel: #ffffff;
   --accent: #155f78;
   --accent-dark: #0f4d62;
+  --accent-soft: #d9eef5;
   --soft: #f8fbfe;
   --danger: #b42335;
+  --shadow: 0 18px 48px rgba(15, 23, 42, 0.14);
 }
 
 * { box-sizing: border-box; }
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, #f8fbfe 0, #eef3f8 320px, #f3f6fb 100%);
+    linear-gradient(180deg, rgba(10, 25, 41, 0.82) 0, rgba(21, 95, 120, 0.54) 240px, rgba(243, 246, 251, 0.96) 520px),
+    url("https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=1800&q=80") center top / cover fixed,
+    #f3f6fb;
 }
 
 .topbar {
@@ -25,10 +29,15 @@ body {
   justify-content: space-between;
   align-items: center;
   gap: 24px;
-  padding: 24px 40px;
-  background: #ffffff;
-  border-bottom: 1px solid var(--line);
-  box-shadow: 0 8px 26px rgba(15, 23, 42, 0.06);
+  padding: 18px 34px;
+  background: rgba(8, 20, 34, 0.78);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 12px 40px rgba(2, 8, 23, 0.22);
+  backdrop-filter: blur(16px);
+  color: #ffffff;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 h1, h2, p { margin: 0; }
@@ -38,12 +47,37 @@ p { color: var(--muted); margin-top: 5px; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+.topbar p,
+.topbar .muted,
+.topbar a {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #e8f8ff, #6ec4d9);
+  color: #082033;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 12px 22px rgba(0, 0, 0, 0.16);
+}
+
 button, select, input {
-  min-height: 38px;
+  min-height: 40px;
   border: 1px solid #c7d0df;
-  border-radius: 6px;
+  border-radius: 8px;
   background: #ffffff;
-  padding: 0 12px;
+  padding: 0 13px;
   color: #172033;
 }
 
@@ -53,7 +87,7 @@ button {
   border-color: var(--accent);
   cursor: pointer;
   font-weight: 650;
-  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 22px rgba(21, 95, 120, 0.24);
 }
 
 button:hover {
@@ -62,8 +96,8 @@ button:hover {
 }
 
 button.secondary {
-  background: #ffffff;
-  border-color: #c7d0df;
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(199, 208, 223, 0.9);
   color: #172033;
   box-shadow: none;
 }
@@ -105,12 +139,79 @@ button.secondary.danger {
 }
 
 main {
-  width: min(1180px, calc(100% - 32px));
-  margin: 26px auto 52px;
+  width: min(1380px, calc(100% - 36px));
+  margin: 28px auto 56px;
 }
 
 .device-main {
   width: min(1440px, calc(100% - 32px));
+}
+
+.hero-panel {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  min-height: 168px;
+  margin-bottom: 18px;
+  padding: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(7, 22, 37, 0.86), rgba(21, 95, 120, 0.70)),
+    url("https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1500&q=80") center / cover;
+  color: #ffffff;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.hero-panel.compact {
+  min-height: 136px;
+}
+
+.hero-panel h2 {
+  font-size: 30px;
+  margin-top: 8px;
+}
+
+.hero-panel p {
+  max-width: 620px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 15px;
+}
+
+.eyebrow {
+  color: #aee7f4;
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.hero-status {
+  display: grid;
+  gap: 5px;
+  min-width: 230px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.hero-status strong {
+  font-size: 16px;
+}
+
+.hero-status small {
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #5df2a6;
+  box-shadow: 0 0 0 6px rgba(93, 242, 166, 0.14), 0 0 22px rgba(93, 242, 166, 0.8);
 }
 
 .back-link {
@@ -123,24 +224,43 @@ main {
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
   margin-bottom: 18px;
 }
 
 .metric, .panel {
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.045);
+  border: 1px solid rgba(215, 224, 236, 0.95);
+  border-radius: 14px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
 }
 
-.metric { padding: 18px; }
-.metric strong { display: block; font-size: 24px; margin-top: 7px; line-height: 1.15; overflow-wrap: anywhere; }
+.metric {
+  position: relative;
+  overflow: hidden;
+  padding: 18px;
+}
+
+.metric::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--accent);
+}
+
+.metric:nth-child(3)::before,
+.metric:nth-child(4)::before { background: #b42335; }
+.metric:nth-child(5)::before,
+.metric:nth-child(6)::before { background: #d38b00; }
+.metric:nth-child(7)::before { background: #1f8a55; }
+
+.metric strong { display: block; font-size: 26px; margin-top: 8px; line-height: 1.15; overflow-wrap: anywhere; }
 .metric span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0; font-weight: 700; }
 
 .panel {
-  padding: 20px;
-  margin-bottom: 18px;
+  padding: 22px;
+  margin-bottom: 20px;
 }
 
 .section-title {
@@ -154,7 +274,7 @@ main {
 form { display: flex; flex-wrap: wrap; gap: 8px; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; min-width: 860px; }
-th, td { text-align: left; padding: 13px 12px; border-bottom: 1px solid #edf1f6; font-size: 14px; vertical-align: top; }
+th, td { text-align: left; padding: 14px 12px; border-bottom: 1px solid #edf1f6; font-size: 14px; vertical-align: top; }
 th { color: #526179; font-size: 12px; text-transform: uppercase; background: var(--soft); }
 tbody tr:hover { background: #fbfdff; }
 
@@ -213,7 +333,7 @@ tbody tr:hover { background: #fbfdff; }
   gap: 8px;
   border: 1px solid #dde3ee;
   border-left-width: 4px;
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 14px;
   background: #ffffff;
 }
@@ -253,6 +373,7 @@ tbody tr:hover { background: #fbfdff; }
   color: #172033;
   white-space: nowrap;
   box-shadow: none;
+  border-radius: 999px;
 }
 
 .tab.active {
@@ -279,8 +400,8 @@ tbody tr:hover { background: #fbfdff; }
 .status-card {
   border: 1px solid #dde3ee;
   border-left-width: 4px;
-  border-radius: 10px;
-  padding: 14px;
+  border-radius: 12px;
+  padding: 16px;
   background: #ffffff;
 }
 
@@ -310,8 +431,8 @@ tbody tr:hover { background: #fbfdff; }
 
 .finding {
   border: 1px solid #dde3ee;
-  border-radius: 10px;
-  padding: 15px;
+  border-radius: 12px;
+  padding: 16px;
   display: grid;
   gap: 8px;
   background: #ffffff;
@@ -406,21 +527,29 @@ tbody tr:hover { background: #fbfdff; }
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: #eef3f8;
+  background:
+    linear-gradient(135deg, rgba(5, 15, 28, 0.84), rgba(21, 95, 120, 0.62)),
+    url("https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1600&q=80") center / cover;
 }
 
 .login-shell {
-  width: min(100% - 32px, 420px);
+  width: min(100% - 32px, 460px);
   margin: 0;
 }
 
 .login-panel {
   display: grid;
   gap: 22px;
-  background: #ffffff;
-  border: 1px solid #d7dfeb;
-  border-radius: 8px;
-  padding: 28px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  border-radius: 18px;
+  padding: 30px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.login-brand {
+  align-items: flex-start;
 }
 
 .login-form,
@@ -440,6 +569,9 @@ tbody tr:hover { background: #fbfdff; }
 
 @media (max-width: 760px) {
   .topbar, .topbar-actions, .section-title { align-items: stretch; flex-direction: column; }
+  .brand { align-items: flex-start; }
+  .hero-panel { align-items: stretch; flex-direction: column; min-height: auto; padding: 22px; }
+  .hero-panel h2 { font-size: 24px; }
   .metrics, .grid { grid-template-columns: 1fr; }
   main { width: min(100% - 20px, 1180px); }
 }

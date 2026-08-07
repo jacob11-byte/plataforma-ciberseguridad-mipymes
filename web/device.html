@@ -6,12 +6,15 @@
   <title>Detalle del equipo - CyberCheck MIPYME</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="device-page">
   <header class="topbar">
-    <div>
+    <div class="brand">
+      <span class="brand-mark">CC</span>
+      <div>
       <a href="/" class="back-link">Volver al panel</a>
       <h1 id="deviceTitle">Equipo</h1>
       <p id="deviceSubtitle">Detalle de seguridad de esta computadora</p>
+      </div>
     </div>
     <div class="topbar-actions">
       <span id="currentUser" class="muted"></span>
@@ -23,6 +26,18 @@
   </header>
 
   <main class="device-main">
+    <section class="hero-panel compact">
+      <div>
+        <span class="eyebrow">Detalle del equipo</span>
+        <h2>Auditoria visual del endpoint</h2>
+        <p>Controles, evidencias, inventario, cambios y estado del agente en un solo lugar.</p>
+      </div>
+      <div class="hero-status">
+        <span class="pulse"></span>
+        <strong>Datos reales</strong>
+        <small>Ultima evidencia almacenada</small>
+      </div>
+    </section>
     <section class="metrics" id="deviceMetrics"></section>
     <section class="panel">
       <div class="tabs" id="tabs"></div>

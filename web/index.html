@@ -6,11 +6,14 @@
   <title>CyberCheck MIPYME</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="dashboard-page">
   <header class="topbar">
-    <div>
+    <div class="brand">
+      <span class="brand-mark">CC</span>
+      <div>
       <h1>CyberCheck MIPYME</h1>
       <p>Panel de seguridad para computadoras Windows.</p>
+      </div>
     </div>
     <div class="topbar-actions">
       <span id="currentUser" class="muted"></span>
@@ -20,6 +23,19 @@
   </header>
 
   <main>
+    <section class="hero-panel">
+      <div>
+        <span class="eyebrow">Consola de seguridad</span>
+        <h2>Postura del endpoint en tiempo real</h2>
+        <p>Estado centralizado de computadoras, agente, problemas abiertos y revisiones recientes.</p>
+      </div>
+      <div class="hero-status">
+        <span class="pulse"></span>
+        <strong>Monitoreo activo</strong>
+        <small>Evidencia enviada por el agente Windows</small>
+      </div>
+    </section>
+
     <section class="metrics" id="metrics"></section>
 
     <section class="panel">
