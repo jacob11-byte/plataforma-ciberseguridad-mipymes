@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+AGENT_VERSION = "0.2.0"
+
 ALLOWED_TASKS = {
     "FULL_SCAN",
     "VERIFY_FIREWALL",
@@ -55,13 +57,23 @@ def system_info() -> dict[str, Any]:
         "hostname": socket.gethostname(),
         "ip_address": ip_address,
         "os_version": platform.platform(),
+        "windows_edition": windows_edition(),
         "architecture": platform.machine(),
     }
 
 
+def windows_edition() -> str | None:
+    if os.name != "nt":
+        return None
+    data = run_powershell(
+        "Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption | ConvertTo-Json -Compress"
+    )
+    return str(data) if data else None
+
+
 def collect_firewall() -> dict[str, Any]:
     if os.name != "nt":
-        return {"domain": True, "private": True, "public": True, "note": "Simulado fuera de Windows"}
+        return {"status": "not_supported", "error": "El agente solo consulta firewall real en Windows."}
     data = run_powershell(
         "Get-NetFirewallProfile | Select-Object Name,Enabled | ConvertTo-Json -Compress"
     )
@@ -107,7 +119,7 @@ def process_name(process_id: Any) -> str | None:
 
 def collect_services(names: list[str]) -> list[dict[str, Any]]:
     if os.name != "nt":
-        return [{"name": name, "running": False, "status": "Unavailable"} for name in names]
+        return [{"name": name, "running": None, "status": "not_supported"} for name in names]
     quoted = ",".join(f"'{name}'" for name in names)
     data = run_powershell(
         f"Get-Service -Name {quoted} -ErrorAction SilentlyContinue | "
@@ -146,12 +158,14 @@ def collect_admins() -> list[str]:
 def register_device(config: dict[str, Any]) -> dict[str, Any]:
     info = system_info()
     body = {
-        "company_name": config.get("company_name", "MIPYME Demo"),
-        "device_id": config["device_id"],
-        "device_name": config.get("device_name", info["hostname"]),
+        "company_name": config.get("company_name", "MIPYME Principal"),
+        "registration_code": config["registration_code"],
+        "hostname": info["hostname"],
         "os_version": info["os_version"],
+        "windows_edition": info["windows_edition"],
         "architecture": info["architecture"],
         "ip_address": info["ip_address"],
+        "agent_version": AGENT_VERSION,
     }
     data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(f"{config['api_url'].rstrip('/')}/api/register", data=data, method="POST")
@@ -163,9 +177,31 @@ def register_device(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def ensure_registered(config: dict[str, Any], config_path: Path) -> None:
+    if config.get("device_id") and config.get("token"):
+        return
+    print("[OK] Registering new agent")
+    result = register_device(config)
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    print(f"[OK] Device ID: {result['device_id']}")
+
+
+def send_heartbeat(config: dict[str, Any]) -> dict[str, Any]:
+    return request_json(
+        "POST",
+        f"{config['api_url'].rstrip('/')}/api/agent/heartbeat",
+        config["token"],
+        {
+            "device_id": config["device_id"],
+            "agent_version": AGENT_VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
 def collect_updates() -> dict[str, Any]:
     if os.name != "nt":
-        return {"pending_count": 0, "reboot_pending": False}
+        return {"status": "not_supported", "pending_count": None, "reboot_pending": None}
     reboot = run_powershell(
         "Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired' | ConvertTo-Json"
     )
@@ -179,7 +215,7 @@ def collect_updates() -> dict[str, Any]:
 
 def collect_antivirus() -> dict[str, Any]:
     if os.name != "nt":
-        return {"enabled": True, "real_time": True, "name": "Simulado"}
+        return {"status": "not_supported", "enabled": None, "real_time": None}
     defender = run_powershell(
         "Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object "
         "AMServiceEnabled,AntivirusEnabled,RealTimeProtectionEnabled,AntispywareEnabled,"
@@ -219,19 +255,25 @@ def collect_antivirus() -> dict[str, Any]:
 
 
 def collect_backup(path: str) -> dict[str, Any]:
+    if not path:
+        return {"status": "not_configured", "exists": None}
     root = Path(path)
     if not root.exists():
-        return {"exists": False, "path": path}
+        return {"status": "missing", "exists": False, "path": path}
     files = [p for p in root.rglob("*") if p.is_file()]
     if not files:
-        return {"exists": False, "path": path}
+        return {"status": "empty", "exists": False, "path": path}
     latest = max(files, key=lambda p: p.stat().st_mtime)
     age = datetime.now(timezone.utc) - datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc)
-    return {"exists": True, "path": path, "days_since_last_backup": age.days, "latest_size": latest.stat().st_size}
+    return {"status": "ok", "exists": True, "path": path, "latest_file": latest.name, "days_since_last_backup": age.days, "latest_size": latest.stat().st_size}
 
 
 def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
-    evidence: dict[str, Any] = {"timestamp": datetime.now(timezone.utc).isoformat(), "system_info": system_info()}
+    evidence: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "agent_version": AGENT_VERSION,
+        "system_info": system_info(),
+    }
     if task_type in {"FULL_SCAN", "VERIFY_FIREWALL"}:
         evidence["firewall"] = collect_firewall()
     if task_type in {"FULL_SCAN", "VERIFY_PORTS"}:
@@ -261,16 +303,21 @@ def request_json(method: str, url: str, token: str, body: dict[str, Any] | None 
 def send_scan(config: dict[str, Any], task_type: str) -> dict[str, Any]:
     if task_type not in ALLOWED_TASKS:
         raise ValueError(f"Tarea no permitida: {task_type}")
+    print(f"[SCAN] Starting {task_type}")
     evidence = collect_evidence(config, task_type)
-    return request_json(
+    result = request_json(
         "POST",
         f"{config['api_url'].rstrip('/')}/api/agent/results",
         config["token"],
         {"device_id": config["device_id"], "scan_type": task_type, "evidence": evidence},
     )
+    print("[OK] Results sent to API")
+    return result
 
 
 def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
+    send_heartbeat(config)
+    print("[OK] Heartbeat sent")
     url = f"{config['api_url'].rstrip('/')}/api/agent/tasks?device_id={urllib.parse.quote(config['device_id'])}"
     tasks = request_json("GET", url, config["token"]).get("tasks", [])[:max_tasks]
     if not tasks:
@@ -278,12 +325,12 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
         return
     for task in tasks:
         try:
-            print(f"Ejecutando tarea {task['id']}: {task['task_type']}")
+            print(f"[TASK] Executing {task['id']}: {task['task_type']}")
             send_scan(config, task["task_type"])
             request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
-            print(f"Tarea {task['id']} completada.")
+            print(f"[OK] Task {task['id']} completed")
         except Exception as exc:
-            print(f"Tarea {task['id']} fallo: {exc}", file=sys.stderr)
+            print(f"[ERROR] Task {task['id']} failed: {exc}", file=sys.stderr)
             try:
                 request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/fail", config["token"], {})
             except Exception:
@@ -291,7 +338,7 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
 
 
 def poll_loop(config: dict[str, Any], interval_seconds: int, max_tasks: int) -> None:
-    print(f"Agente activo. Consultando tareas cada {interval_seconds} segundos.")
+    print(f"[TASK] Waiting for tasks every {interval_seconds} seconds")
     while True:
         poll_once(config, max_tasks=max_tasks)
         time.sleep(interval_seconds)
@@ -309,11 +356,19 @@ def main() -> int:
     args = parser.parse_args()
     config_path = Path(args.config)
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    if os.getenv("API_BASE_URL"):
+        config["api_url"] = os.getenv("API_BASE_URL")
     try:
+        print("[OK] Agent started")
+        info = system_info()
+        print(f"[OK] Computer: {info['hostname']}")
+        ensure_registered(config, config_path)
+        print(f"[OK] Device ID: {config['device_id']}")
+        send_heartbeat(config)
+        print("[OK] API connected")
+        print("[OK] Heartbeat sent")
         if args.register:
-            result = register_device(config)
-            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-            print(json.dumps(result, indent=2))
+            print(json.dumps({"device_id": config["device_id"], "registered": True}, indent=2))
         elif args.loop:
             poll_loop(config, interval_seconds=args.interval, max_tasks=args.max_tasks)
         elif args.poll_once:

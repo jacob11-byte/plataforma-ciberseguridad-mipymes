@@ -48,19 +48,20 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
     results: list[RuleResult] = []
     if "firewall" in evidence:
         firewall = evidence.get("firewall") or {}
-        public_enabled = _bool(firewall.get("public", True))
-        results.append(
-            RuleResult(
-                rule_id="FIREWALL_PUBLIC_DISABLED",
-                control="firewall",
-                title="Cortafuegos publico desactivado",
-                severity="Alto",
-                triggered=not public_enabled,
-                evidence={"public": firewall.get("public")},
-                recommendation="Activar el perfil publico del cortafuegos y verificar nuevamente.",
-                closure_criteria="El perfil publico aparece activo en una nueva evidencia.",
+        if firewall.get("status") != "not_supported":
+            public_enabled = _bool(firewall.get("public", True))
+            results.append(
+                RuleResult(
+                    rule_id="FIREWALL_PUBLIC_DISABLED",
+                    control="firewall",
+                    title="Cortafuegos publico desactivado",
+                    severity="Alto",
+                    triggered=not public_enabled,
+                    evidence={"public": firewall.get("public")},
+                    recommendation="Activar el perfil publico del cortafuegos y verificar nuevamente.",
+                    closure_criteria="El perfil publico aparece activo en una nueva evidencia.",
+                )
             )
-        )
     else:
         firewall = {}
 
@@ -126,14 +127,19 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
 
     if "updates" in evidence:
         updates = evidence.get("updates") or {}
-        pending_count = int(updates.get("pending_count") or 0)
+        if updates.get("status") in {"not_supported", "error"}:
+            pending_count = 0
+            triggered_updates = False
+        else:
+            pending_count = int(updates.get("pending_count") or 0)
+            triggered_updates = pending_count > 0 or _bool(updates.get("reboot_pending", False))
         results.append(
             RuleResult(
                 rule_id="UPDATES_PENDING",
                 control="updates",
                 title="Actualizaciones pendientes",
                 severity="Alto" if pending_count >= 3 else "Medio",
-                triggered=pending_count > 0 or _bool(updates.get("reboot_pending", False)),
+                triggered=triggered_updates,
                 evidence={"pending_count": pending_count, "reboot_pending": updates.get("reboot_pending")},
                 recommendation="Instalar actualizaciones pendientes y reiniciar cuando corresponda.",
                 closure_criteria="No quedan pendientes y no existe reinicio requerido segun nueva consulta.",
@@ -142,7 +148,8 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
 
     if "antivirus" in evidence:
         antivirus = evidence.get("antivirus") or {}
-        av_bad = not _bool(antivirus.get("enabled", True)) or not _bool(antivirus.get("real_time", True))
+        av_unknown = antivirus.get("status") in {"not_supported", "unavailable", "error"}
+        av_bad = False if av_unknown else (not _bool(antivirus.get("enabled", True)) or not _bool(antivirus.get("real_time", True)))
         results.append(
             RuleResult(
                 rule_id="ANTIVIRUS_DISABLED",
@@ -208,19 +215,20 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
 
     if "backup" in evidence:
         backup = evidence.get("backup") or {}
-        exists = _bool(backup.get("exists", False))
-        days = backup.get("days_since_last_backup")
-        too_old = days is None or int(days) > 7
-        results.append(
-            RuleResult(
-                rule_id="BACKUP_OLD_OR_MISSING",
-                control="backup",
-                title="Respaldo inexistente o mayor a siete dias",
-                severity="Alto",
-                triggered=(not exists) or too_old,
-                evidence={"exists": backup.get("exists"), "days_since_last_backup": days, "latest_size": backup.get("latest_size")},
-                recommendation="Ejecutar un respaldo valido y confirmar que exista un archivo reciente y no vacio.",
-                closure_criteria="Existe un archivo de respaldo reciente y no vacio.",
+        if backup.get("status") != "not_configured":
+            exists = _bool(backup.get("exists", False))
+            days = backup.get("days_since_last_backup")
+            too_old = days is None or int(days) > 7
+            results.append(
+                RuleResult(
+                    rule_id="BACKUP_OLD_OR_MISSING",
+                    control="backup",
+                    title="Respaldo inexistente o mayor a siete dias",
+                    severity="Alto",
+                    triggered=(not exists) or too_old,
+                    evidence={"exists": backup.get("exists"), "days_since_last_backup": days, "latest_size": backup.get("latest_size")},
+                    recommendation="Ejecutar un respaldo valido y confirmar que exista un archivo reciente y no vacio.",
+                    closure_criteria="Existe un archivo de respaldo reciente y no vacio.",
+                )
             )
-        )
     return results

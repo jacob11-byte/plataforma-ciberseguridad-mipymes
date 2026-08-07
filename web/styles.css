@@ -153,6 +153,24 @@ th { color: #526179; font-size: 12px; text-transform: uppercase; }
 .muted { color: #6a788d; font-size: 13px; }
 .error { color: #9b1128; font-size: 14px; }
 
+.status {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status.online {
+  background: #dff7ea;
+  color: #146b3a;
+}
+
+.status.offline {
+  background: #ffd9de;
+  color: #9b1128;
+}
+
 .login-page {
   min-height: 100vh;
   display: grid;

@@ -22,24 +22,31 @@ async function loadDashboard() {
 }
 
 function render() {
-  const { devices, findings, evidences, scans, tasks, history } = state.dashboard;
+  const { devices, findings, evidences, scans, tasks, history, summary } = state.dashboard;
   const openFindings = findings.filter((f) => f.status !== "resolved");
   const latestEvidence = latestEvidenceByDeviceAndControl(evidences || []);
+  const metrics = summary || {};
   document.getElementById("metrics").innerHTML = [
-    ["Equipos", devices.length],
-    ["Hallazgos abiertos", openFindings.length],
+    ["Equipos", metrics.devices ?? devices.length],
+    ["En linea", metrics.online_devices ?? 0],
+    ["Hallazgos abiertos", metrics.open_findings ?? openFindings.length],
+    ["Criticos", metrics.critical ?? 0],
+    ["Altos", metrics.high ?? 0],
+    ["Medios", metrics.medium ?? 0],
+    ["Corregidos", metrics.resolved ?? 0],
     ["Analisis", scans.length],
-    ["Tareas", tasks.length],
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
 
   document.getElementById("deviceSelect").innerHTML = devices
     .map((d) => `<option value="${d.device_id}">${d.device_id}</option>`).join("");
+  document.getElementById("taskForm").hidden = devices.length === 0;
+  document.getElementById("emptyDevices").hidden = devices.length !== 0;
   document.getElementById("devices").innerHTML = devices.map((d) => `
     <tr>
-      <td><strong>${d.device_id}</strong><div class="muted">${d.name}</div></td>
-      <td>${d.os_version || "Sin dato"}<div class="muted">${d.architecture || ""}</div></td>
+      <td><strong>${d.name || d.hostname || d.device_id}</strong><div class="muted">${d.device_id}</div></td>
+      <td>${d.windows_edition || d.os_version || "Sin dato"}<div class="muted">${d.architecture || ""}</div></td>
+      <td><span class="status ${d.agent_status}">${d.agent_status_label || "Sin conexion"}</span><div class="muted">${d.agent_version || "sin version"}</div></td>
       <td>${d.last_seen || "Sin contacto"}</td>
-      <td>${d.token === "demo-token" ? "demo-token" : "registrado"}</td>
     </tr>
   `).join("");
 

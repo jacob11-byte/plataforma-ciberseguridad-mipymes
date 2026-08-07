@@ -48,16 +48,14 @@ Start command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=elige-una-contrasena-segura
 SESSION_SECRET=un-texto-largo-aleatorio
+AGENT_REGISTRATION_CODE=codigo-largo-para-registrar-agentes
 ```
 
 Si `DATABASE_URL` existe, la app usa PostgreSQL. Si no existe, usa SQLite local en `data/cybercheck.db`.
 
 En desarrollo local, si no configuras esas variables, el login usa `admin` / `admin123`.
 
-Al iniciar se crea un equipo demo:
-
-- `device_id`: `PC-CONTABILIDAD-001`
-- `token`: `demo-token`
+Al iniciar no se crean equipos demo. El dashboard mostrara `No hay agentes registrados` hasta que un agente real se registre.
 
 ## Ejecutar el agente
 
@@ -82,7 +80,10 @@ py -3.12 agent/windows_agent.py --config agent/agent_config.render.example.json 
 Para enviar evidencia real a la plataforma desplegada en Render:
 
 ```powershell
-py -3.12 agent/windows_agent.py --config agent/agent_config.render.example.json --scan FULL_SCAN
+copy agent\agent_config.render.example.json agent\agent_config.render.json
+# Edita registration_code con el mismo AGENT_REGISTRATION_CODE configurado en Render.
+py -3.12 agent/windows_agent.py --config agent/agent_config.render.json --register
+py -3.12 agent/windows_agent.py --config agent/agent_config.render.json --scan FULL_SCAN
 ```
 
 Para instalar una tarea programada que consulte verificaciones pendientes cada 15 minutos:

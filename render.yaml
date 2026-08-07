@@ -13,3 +13,5 @@ services:
         sync: false
       - key: SESSION_SECRET
         sync: false
+      - key: AGENT_REGISTRATION_CODE
+        sync: false

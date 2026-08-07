@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -14,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from .rules import evaluate_rules
-from .storage import connect, generate_token, init_db, insert_returning_id, json_dumps
+from .storage import connect, generate_device_id, generate_token, init_db, insert_returning_id, json_dumps
 
 ALLOWED_TASKS = {
     "FULL_SCAN",
@@ -36,12 +37,20 @@ app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
 
 
 class RegisterRequest(BaseModel):
-    company_name: str = Field(min_length=2)
-    device_id: str = Field(min_length=2)
-    device_name: str = Field(min_length=2)
+    registration_code: str = Field(min_length=4)
+    company_name: str = Field(default="MIPYME Principal", min_length=2)
+    hostname: str = Field(min_length=1)
     os_version: str | None = None
+    windows_edition: str | None = None
     architecture: str | None = None
     ip_address: str | None = None
+    agent_version: str = "0.1.0"
+
+
+class HeartbeatRequest(BaseModel):
+    device_id: str
+    agent_version: str
+    timestamp: str | None = None
 
 
 class ScanRequest(BaseModel):
@@ -119,15 +128,27 @@ def _require_user(request: Request) -> str:
     return username
 
 
+def _registration_code() -> str:
+    return os.getenv("AGENT_REGISTRATION_CODE", "cybercheck-register-dev")
+
+
 def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
     if not token:
         raise HTTPException(status_code=401, detail="Token requerido")
     token = token.removeprefix("Bearer ").strip()
     with connect() as db:
-        row = db.execute("SELECT * FROM devices WHERE device_id = ? AND token = ?", (device_id, token)).fetchone()
-        if not row:
-            raise HTTPException(status_code=403, detail="Token invalido para el equipo")
-        return dict(row)
+        row = db.execute(
+            """
+            SELECT d.* FROM devices d
+            JOIN agent_credentials c ON c.device_id = d.device_id
+            WHERE d.device_id = ? AND c.token = ? AND c.active = ?
+            """,
+            (device_id, token, True),
+        ).fetchone()
+        if row:
+            db.execute("UPDATE agent_credentials SET last_used_at=CURRENT_TIMESTAMP WHERE device_id=? AND token=?", (device_id, token))
+            return dict(row)
+        raise HTTPException(status_code=403, detail="Token invalido para el equipo")
 
 
 @app.get("/")
@@ -186,36 +207,50 @@ def me(request: Request) -> dict[str, Any]:
 
 @app.post("/api/register")
 def register(payload: RegisterRequest) -> dict[str, Any]:
+    if not hmac.compare_digest(payload.registration_code, _registration_code()):
+        raise HTTPException(status_code=403, detail="Codigo de registro invalido")
     with connect() as db:
         company = db.execute("SELECT id FROM companies WHERE name = ?", (payload.company_name,)).fetchone()
         company_id = company["id"] if company else insert_returning_id(
             db, "INSERT INTO companies(name) VALUES (?)", (payload.company_name,)
         )
-        existing = db.execute("SELECT token FROM devices WHERE device_id = ?", (payload.device_id,)).fetchone()
-        token = existing["token"] if existing else generate_token()
+        device_id = generate_device_id()
+        token = generate_token()
         db.execute(
             """
-            INSERT INTO devices(device_id, company_id, name, os_version, architecture, ip_address, token)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(device_id) DO UPDATE SET
-                company_id=excluded.company_id,
-                name=excluded.name,
-                os_version=excluded.os_version,
-                architecture=excluded.architecture,
-                ip_address=excluded.ip_address,
-                last_seen=CURRENT_TIMESTAMP
+            INSERT INTO devices(device_id, company_id, name, hostname, os_version, windows_edition,
+                architecture, ip_address, agent_version, token, installed_at, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
             (
-                payload.device_id,
+                device_id,
                 company_id,
-                payload.device_name,
+                payload.hostname,
+                payload.hostname,
                 payload.os_version,
+                payload.windows_edition,
                 payload.architecture,
                 payload.ip_address,
+                payload.agent_version,
                 token,
             ),
         )
-        return {"device_id": payload.device_id, "token": token}
+        db.execute(
+            "INSERT INTO agent_credentials(device_id, token) VALUES (?, ?)",
+            (device_id, token),
+        )
+        return {"device_id": device_id, "token": token, "hostname": payload.hostname}
+
+
+@app.post("/api/agent/heartbeat")
+def heartbeat(payload: HeartbeatRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _device_for_token(payload.device_id, authorization)
+    with connect() as db:
+        db.execute(
+            "UPDATE devices SET last_seen=CURRENT_TIMESTAMP, agent_version=? WHERE device_id=?",
+            (payload.agent_version, payload.device_id),
+        )
+        return {"ok": True, "device_id": payload.device_id}
 
 
 @app.post("/api/agent/results")
@@ -227,6 +262,29 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
     rule_results = evaluate_rules(payload.evidence)
     with connect() as db:
         db.execute("UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE device_id = ?", (payload.device_id,))
+        system_info = payload.evidence.get("system_info") or {}
+        if system_info:
+            db.execute(
+                """
+                UPDATE devices SET
+                    name=?,
+                    hostname=?,
+                    os_version=?,
+                    windows_edition=?,
+                    architecture=?,
+                    ip_address=?
+                WHERE device_id=?
+                """,
+                (
+                    system_info.get("hostname") or payload.device_id,
+                    system_info.get("hostname"),
+                    system_info.get("os_version"),
+                    system_info.get("windows_edition"),
+                    system_info.get("architecture"),
+                    system_info.get("ip_address"),
+                    payload.device_id,
+                ),
+            )
         scan_id = insert_returning_id(
             db,
             "INSERT INTO scans(device_id, scan_type, status) VALUES (?, ?, 'completed')",
@@ -362,11 +420,48 @@ def dashboard(request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
         evidences = [dict(row) for row in db.execute("SELECT * FROM evidences ORDER BY created_at DESC LIMIT 120")]
+        devices = [device_view(dict(row)) for row in db.execute("SELECT * FROM devices ORDER BY last_seen DESC NULLS LAST")]
+        findings = [dict(row) for row in db.execute("SELECT * FROM findings ORDER BY updated_at DESC")]
+        open_findings = [finding for finding in findings if finding["status"] != "resolved"]
         return {
-            "devices": [dict(row) for row in db.execute("SELECT * FROM devices ORDER BY last_seen DESC NULLS LAST")],
-            "findings": [dict(row) for row in db.execute("SELECT * FROM findings ORDER BY updated_at DESC")],
+            "devices": devices,
+            "findings": findings,
             "evidences": evidences,
             "scans": [dict(row) for row in db.execute("SELECT * FROM scans ORDER BY created_at DESC LIMIT 20")],
             "tasks": [dict(row) for row in db.execute("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 20")],
             "history": [dict(row) for row in db.execute("SELECT * FROM history ORDER BY created_at DESC LIMIT 40")],
+            "summary": {
+                "devices": len(devices),
+                "online_devices": len([device for device in devices if device["agent_status"] == "online"]),
+                "open_findings": len(open_findings),
+                "critical": len([finding for finding in open_findings if finding["severity"].lower() in {"critico", "critical"}]),
+                "high": len([finding for finding in open_findings if finding["severity"].lower() in {"alto", "high"}]),
+                "medium": len([finding for finding in open_findings if finding["severity"].lower() in {"medio", "medium"}]),
+                "resolved": len([finding for finding in findings if finding["status"] == "resolved"]),
+            },
         }
+
+
+def device_view(row: dict[str, Any]) -> dict[str, Any]:
+    row.pop("token", None)
+    last_seen = row.get("last_seen")
+    row["agent_status"] = "offline"
+    row["agent_status_label"] = "Sin conexion"
+    parsed = parse_timestamp(last_seen)
+    if parsed and (datetime.now(timezone.utc) - parsed).total_seconds() <= 300:
+        row["agent_status"] = "online"
+        row["agent_status_label"] = "En linea"
+    return row
+
+
+def parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None

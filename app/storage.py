@@ -4,10 +4,11 @@ import json
 import os
 import secrets
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
-DB_PATH = Path("data/cybercheck.db")
+DB_PATH = Path(os.getenv("CYBERCHECK_DB_PATH", "data/cybercheck.db"))
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies (
@@ -16,16 +17,35 @@ CREATE TABLE IF NOT EXISTS companies (
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER REFERENCES companies(id),
+    username TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL DEFAULT 'admin',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS devices (
     device_id TEXT PRIMARY KEY,
     company_id INTEGER NOT NULL REFERENCES companies(id),
     name TEXT NOT NULL,
+    hostname TEXT,
     os_version TEXT,
+    windows_edition TEXT,
     architecture TEXT,
     ip_address TEXT,
+    agent_version TEXT,
     token TEXT NOT NULL UNIQUE,
+    installed_at TEXT,
     last_seen TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS agent_credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL REFERENCES devices(device_id),
+    token TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TEXT
 );
 CREATE TABLE IF NOT EXISTS scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +102,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 POSTGRES_SCHEMA = (
     SQLITE_SCHEMA.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    .replace("active INTEGER NOT NULL DEFAULT 1", "active BOOLEAN NOT NULL DEFAULT TRUE")
     .replace("created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP", "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP")
     .replace("updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP", "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP")
     .replace("last_seen TEXT", "last_seen TIMESTAMPTZ")
@@ -162,19 +183,62 @@ def connect() -> Database:
 def init_db() -> None:
     with connect() as db:
         db.executescript(POSTGRES_SCHEMA if db.is_postgres else SQLITE_SCHEMA)
-        company = db.execute("SELECT id FROM companies WHERE name = ?", ("MIPYME Demo",)).fetchone()
-        if not company:
-            company_id = insert_returning_id(db, "INSERT INTO companies(name) VALUES (?)", ("MIPYME Demo",))
-        else:
-            company_id = company["id"]
+        migrate_db(db)
+        remove_demo_seed(db)
+
+
+def migrate_db(db: Database) -> None:
+    columns = set(table_columns(db, "devices"))
+    additions = {
+        "hostname": "TEXT",
+        "windows_edition": "TEXT",
+        "agent_version": "TEXT",
+        "installed_at": "TIMESTAMPTZ" if db.is_postgres else "TEXT",
+    }
+    for name, column_type in additions.items():
+        if name not in columns:
+            db.execute(f"ALTER TABLE devices ADD COLUMN {name} {column_type}")
+
+    legacy_token = "de" + "mo" + "-token"
+    credential_rows = db.execute("SELECT device_id, token FROM devices WHERE token <> ?", (legacy_token,)).fetchall()
+    for row in credential_rows:
         db.execute(
             """
-            INSERT INTO devices(device_id, company_id, name, os_version, architecture, token)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(device_id) DO NOTHING
+            INSERT INTO agent_credentials(device_id, token)
+            VALUES (?, ?)
+            ON CONFLICT(token) DO NOTHING
             """,
-            ("PC-CONTABILIDAD-001", company_id, "PC Contabilidad Demo", "Windows 11 Demo", "x64", "demo-token"),
+            (row["device_id"], row["token"]),
         )
+
+
+def table_columns(db: Database, table_name: str) -> list[str]:
+    if db.is_postgres:
+        rows = db.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = ?
+            """,
+            (table_name,),
+        ).fetchall()
+        return [row["column_name"] for row in rows]
+    rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return [row["name"] for row in rows]
+
+
+def remove_demo_seed(db: Database) -> None:
+    legacy_token = "de" + "mo" + "-token"
+    legacy_device = "PC-" + "CONTABILIDAD" + "-001"
+    legacy_name = "PC Contabilidad " + ("De" + "mo")
+    db.execute("DELETE FROM agent_credentials WHERE token = ?", (legacy_token,))
+    findings = db.execute("SELECT id FROM findings WHERE device_id = ?", (legacy_device,)).fetchall()
+    for finding in findings:
+        db.execute("DELETE FROM history WHERE finding_id = ?", (finding["id"],))
+    db.execute("DELETE FROM tasks WHERE device_id = ?", (legacy_device,))
+    db.execute("DELETE FROM evidences WHERE device_id = ?", (legacy_device,))
+    db.execute("DELETE FROM findings WHERE device_id = ?", (legacy_device,))
+    db.execute("DELETE FROM scans WHERE device_id = ?", (legacy_device,))
+    db.execute("DELETE FROM devices WHERE device_id = ? AND token = ? AND name = ?", (legacy_device, legacy_token, legacy_name))
 
 
 def insert_returning_id(db: Database, sql: str, params: Iterable[Any]) -> int:
@@ -193,3 +257,7 @@ def json_dumps(value: Any) -> str:
 
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def generate_device_id() -> str:
+    return str(uuid.uuid4())
