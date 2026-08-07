@@ -33,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
 SESSION_COOKIE = "cybercheck_session"
 SESSION_MAX_AGE = 60 * 60 * 8
+AGENT_ONLINE_WINDOW_SECONDS = 10 * 60
 
 app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
 
@@ -399,6 +400,30 @@ def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
         return {"task_id": task_id, "status": "pending"}
 
 
+@app.post("/api/devices/{device_id}/reconnect")
+def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        device = db.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        if not device:
+            raise HTTPException(status_code=404, detail="Equipo no existe")
+        view = device_view(dict(device))
+    return {
+        "device_id": device_id,
+        "agent_status": view["agent_status"],
+        "agent_status_label": view["agent_status_label"],
+        "can_remote_start": False,
+        "message": (
+            "El servidor no puede iniciar un programa dentro de Windows si el agente esta desconectado. "
+            "Ejecuta uno de estos comandos en la computadora del agente para forzar la reconexion."
+        ),
+        "commands": [
+            "Start-ScheduledTask -TaskName \"CyberCheck MIPYME Agent User\"",
+            "cd C:\\pg2; py -3.12 agent\\windows_agent.py --config agent\\agent_config.render.json --poll-once --max-tasks 3",
+        ],
+    }
+
+
 @app.post("/api/agent/tasks/{task_id}/complete")
 def complete_task(task_id: int, request: Request, authorization: str | None = Header(default=None)) -> dict[str, str]:
     with connect() as db:
@@ -454,7 +479,7 @@ def device_view(row: dict[str, Any]) -> dict[str, Any]:
     row["agent_status"] = "offline"
     row["agent_status_label"] = "Sin conexion"
     parsed = parse_timestamp(last_seen)
-    if parsed and (datetime.now(timezone.utc) - parsed).total_seconds() <= 300:
+    if parsed and (datetime.now(timezone.utc) - parsed).total_seconds() <= AGENT_ONLINE_WINDOW_SECONDS:
         row["agent_status"] = "online"
         row["agent_status_label"] = "En linea"
     return row

@@ -2,7 +2,7 @@ param(
     [string]$ConfigPath = "C:\pg2\agent\agent_config.render.json",
     [string]$PythonExe = "",
     [string]$TaskName = "CyberCheck MIPYME Agent",
-    [int]$IntervalMinutes = 15,
+    [int]$IntervalMinutes = 5,
     [switch]$RunElevated
 )
 
@@ -20,7 +20,7 @@ if ([string]::IsNullOrWhiteSpace($PythonExe)) {
 
 $action = New-ScheduledTaskAction `
     -Execute $PythonExe `
-    -Argument "-3.12 `"$agentPath`" --config `"$configFullPath`" --poll-once --max-tasks 2" `
+    -Argument "-3.12 `"$agentPath`" --config `"$configFullPath`" --poll-once --max-tasks 1" `
     -WorkingDirectory $projectRoot
 
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
@@ -28,12 +28,17 @@ $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
 
 $runLevel = if ($RunElevated) { "Highest" } else { "Limited" }
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel $runLevel
+$settings = New-ScheduledTaskSettingsSet `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
+    -StartWhenAvailable
 
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
     -Trigger $trigger `
     -Principal $principal `
+    -Settings $settings `
     -Description "Consulta tareas de CyberCheck y ejecuta verificaciones permitidas." `
     -Force
 

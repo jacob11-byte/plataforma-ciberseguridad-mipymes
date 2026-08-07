@@ -46,6 +46,12 @@ button.secondary {
   color: #172033;
 }
 
+button.small {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -89,9 +95,30 @@ main {
 
 form { display: flex; flex-wrap: wrap; gap: 8px; }
 .table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; min-width: 720px; }
+table { width: 100%; border-collapse: collapse; min-width: 860px; }
 th, td { text-align: left; padding: 12px; border-bottom: 1px solid #edf1f6; font-size: 14px; }
 th { color: #526179; font-size: 12px; text-transform: uppercase; }
+
+.notice {
+  margin-top: 14px;
+  border: 1px solid #c7d0df;
+  border-left: 4px solid #176b87;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.notice pre {
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 10px;
+  border: 1px solid #dde3ee;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172033;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
 
 .findings {
   display: grid;

@@ -48,8 +48,12 @@ function render() {
       <td>${d.windows_edition || d.os_version || "Sin dato"}<div class="muted">${d.architecture || ""}</div></td>
       <td><span class="status ${d.agent_status}">${d.agent_status_label || "Sin conexion"}</span><div class="muted">${d.agent_version || "sin version"}</div></td>
       <td>${d.last_seen || "Sin contacto"}</td>
+      <td><button class="small secondary reconnect-btn" data-device-id="${escapeHtml(d.device_id)}">Reconectar</button></td>
     </tr>
   `).join("");
+  document.querySelectorAll(".reconnect-btn").forEach((button) => {
+    button.addEventListener("click", () => reconnectDevice(button.dataset.deviceId));
+  });
 
   document.getElementById("openCount").textContent = `${openFindings.length} abiertos`;
   document.getElementById("securityStatus").innerHTML = renderSecurityStatus(latestStatus);
@@ -360,8 +364,27 @@ document.getElementById("taskForm").addEventListener("submit", async (event) => 
     }),
   });
   await loadDashboard();
-  alert("Tarea creada. Para ejecutarla, el agente debe estar corriendo en tu computadora con --poll-once o --loop.");
+  alert("Tarea creada. El agente la ejecutara automaticamente cuando haga su proxima conexion.");
 });
+
+async function reconnectDevice(deviceId) {
+  const notice = document.getElementById("reconnectNotice");
+  notice.hidden = false;
+  notice.innerHTML = "Revisando reconexion...";
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/reconnect`, { method: "POST" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  const data = await response.json();
+  const commands = (data.commands || []).map((command) => `<pre>${escapeHtml(command)}</pre>`).join("");
+  notice.innerHTML = `
+    <strong>Reconectar agente</strong>
+    <p>${escapeHtml(data.message || "Ejecuta el comando en el equipo del agente.")}</p>
+    ${commands}
+  `;
+  await loadDashboard();
+}
 
 ensureSession().then((ok) => {
   if (ok) {
