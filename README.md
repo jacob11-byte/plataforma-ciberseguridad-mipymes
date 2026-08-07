@@ -73,6 +73,18 @@ Para consultar tareas pendientes y ejecutar verificaciones solicitadas desde el 
 py -3.12 agent/windows_agent.py --config agent/agent_config.example.json --poll-once
 ```
 
+Para enviar evidencia real a la plataforma desplegada en Render:
+
+```powershell
+py -3.12 agent/windows_agent.py --config agent/agent_config.render.example.json --scan FULL_SCAN
+```
+
+Para instalar una tarea programada que consulte verificaciones pendientes cada hora:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1
+```
+
 ## Pruebas
 
 ```powershell

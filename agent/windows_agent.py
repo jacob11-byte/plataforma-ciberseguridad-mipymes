@@ -45,9 +45,14 @@ def run_powershell(script: str) -> Any:
 
 
 def system_info() -> dict[str, Any]:
+    ip_address = None
+    try:
+        ip_address = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        ip_address = None
     return {
         "hostname": socket.gethostname(),
-        "ip_address": socket.gethostbyname(socket.gethostname()),
+        "ip_address": ip_address,
         "os_version": platform.platform(),
         "architecture": platform.machine(),
     }
@@ -75,9 +80,28 @@ def collect_ports() -> list[dict[str, Any]]:
     )
     rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
     return [
-        {"address": row.get("LocalAddress"), "port": row.get("LocalPort"), "process_id": row.get("OwningProcess")}
+        {
+            "address": row.get("LocalAddress"),
+            "port": row.get("LocalPort"),
+            "process_id": row.get("OwningProcess"),
+            "process_name": process_name(row.get("OwningProcess")),
+        }
         for row in rows
     ]
+
+
+def process_name(process_id: Any) -> str | None:
+    if os.name != "nt" or process_id in {None, ""}:
+        return None
+    try:
+        pid = int(process_id)
+    except (TypeError, ValueError):
+        return None
+    data = run_powershell(
+        f"Get-Process -Id {pid} -ErrorAction SilentlyContinue | "
+        "Select-Object -ExpandProperty ProcessName | ConvertTo-Json -Compress"
+    )
+    return str(data) if data else None
 
 
 def collect_services(names: list[str]) -> list[dict[str, Any]]:
@@ -99,12 +123,43 @@ def collect_admins() -> list[str]:
     if os.name != "nt":
         return []
     data = run_powershell(
-        "Get-LocalGroupMember -Group 'Administradores' -ErrorAction SilentlyContinue | "
-        "Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
+        "$group = Get-LocalGroup | Where-Object { $_.SID -eq 'S-1-5-32-544' } | Select-Object -First 1; "
+        "if ($group) { Get-LocalGroupMember -Group $group.Name -ErrorAction SilentlyContinue | "
+        "Select-Object -ExpandProperty Name | ConvertTo-Json -Compress }"
     )
+    if isinstance(data, dict) and data.get("error"):
+        data = run_powershell(
+            "net localgroup Administradores | Select-Object -Skip 6 | "
+            "Where-Object { $_ -and $_ -notmatch 'completado|completed|---' } | ConvertTo-Json -Compress"
+        )
+    if isinstance(data, dict) and data.get("error"):
+        data = run_powershell(
+            "net localgroup Administrators | Select-Object -Skip 6 | "
+            "Where-Object { $_ -and $_ -notmatch 'completed|completado|---' } | ConvertTo-Json -Compress"
+        )
     if isinstance(data, list):
-        return [str(item) for item in data]
-    return [str(data)] if data else []
+        return [str(item).strip() for item in data if str(item).strip()]
+    return [str(data).strip()] if data else []
+
+
+def register_device(config: dict[str, Any]) -> dict[str, Any]:
+    info = system_info()
+    body = {
+        "company_name": config.get("company_name", "MIPYME Demo"),
+        "device_id": config["device_id"],
+        "device_name": config.get("device_name", info["hostname"]),
+        "os_version": info["os_version"],
+        "architecture": info["architecture"],
+        "ip_address": info["ip_address"],
+    }
+    data = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(f"{config['api_url'].rstrip('/')}/api/register", data=data, method="POST")
+    request.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(request, timeout=30) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    config["device_id"] = result["device_id"]
+    config["token"] = result["token"]
+    return result
 
 
 def collect_updates() -> dict[str, Any]:
@@ -199,10 +254,16 @@ def main() -> int:
     parser.add_argument("--config", default="agent/agent_config.example.json")
     parser.add_argument("--scan", choices=sorted(ALLOWED_TASKS))
     parser.add_argument("--poll-once", action="store_true")
+    parser.add_argument("--register", action="store_true")
     args = parser.parse_args()
-    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    config_path = Path(args.config)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     try:
-        if args.poll_once:
+        if args.register:
+            result = register_device(config)
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            print(json.dumps(result, indent=2))
+        elif args.poll_once:
             poll_once(config)
         else:
             print(json.dumps(send_scan(config, args.scan or "FULL_SCAN"), indent=2))

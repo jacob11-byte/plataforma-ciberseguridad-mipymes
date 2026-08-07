@@ -1,0 +1,7 @@
+{
+  "api_url": "https://plataforma-ciberseguridad-mipymes.onrender.com",
+  "device_id": "PC-CONTABILIDAD-001",
+  "token": "demo-token",
+  "backup_path": "C:\\Backups",
+  "risk_services": ["TermService", "RemoteRegistry", "WinRM"]
+}
