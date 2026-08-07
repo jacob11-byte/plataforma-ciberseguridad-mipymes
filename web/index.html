@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CyberCheck MIPYME</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>CyberCheck MIPYME</h1>
+      <p>Deteccion y verificacion automatica de configuraciones Windows.</p>
+    </div>
+    <button id="refreshBtn">Actualizar</button>
+  </header>
+
+  <main>
+    <section class="metrics" id="metrics"></section>
+
+    <section class="panel">
+      <div class="section-title">
+        <h2>Equipos</h2>
+        <form id="taskForm">
+          <select id="deviceSelect"></select>
+          <select id="taskType">
+            <option>FULL_SCAN</option>
+            <option>VERIFY_FIREWALL</option>
+            <option>VERIFY_PORTS</option>
+            <option>VERIFY_SERVICES</option>
+            <option>VERIFY_ADMINISTRATORS</option>
+            <option>VERIFY_UPDATES</option>
+            <option>VERIFY_ANTIVIRUS</option>
+            <option>VERIFY_BACKUP</option>
+          </select>
+          <button type="submit">Solicitar verificacion</button>
+        </form>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Equipo</th><th>Sistema</th><th>Ultimo contacto</th><th>Token demo</th></tr></thead>
+          <tbody id="devices"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <h2>Hallazgos</h2>
+        <span id="openCount"></span>
+      </div>
+      <div id="findings" class="findings"></div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Analisis recientes</h2>
+        <div id="scans" class="timeline"></div>
+      </div>
+      <div class="panel">
+        <h2>Historial de verificacion</h2>
+        <div id="history" class="timeline"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

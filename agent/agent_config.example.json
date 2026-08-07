@@ -1,0 +1,7 @@
+{
+  "api_url": "http://127.0.0.1:8000",
+  "device_id": "PC-CONTABILIDAD-001",
+  "token": "demo-token",
+  "backup_path": "C:\\Backups",
+  "risk_services": ["TermService", "RemoteRegistry", "WinRM"]
+}

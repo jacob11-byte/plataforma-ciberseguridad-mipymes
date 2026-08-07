@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class RuleResult:
+    rule_id: str
+    control: str
+    title: str
+    severity: str
+    triggered: bool
+    evidence: dict[str, Any]
+    recommendation: str
+    closure_criteria: str
+
+
+AUTHORIZED_ADMIN_NAMES = {"administrador", "administrator", "soporte"}
+RISKY_SERVICES = {
+    "TermService": "Servicios de Escritorio remoto habilitados",
+    "RemoteRegistry": "Registro remoto habilitado",
+    "WinRM": "Administracion remota WinRM habilitada",
+}
+
+
+def _bool(value: Any) -> bool:
+    return str(value).lower() in {"true", "1", "yes", "enabled", "on"}
+
+
+def _admin_name(value: Any) -> str:
+    text = str(value)
+    if "\\" in text:
+        text = text.rsplit("\\", 1)[-1]
+    return text.strip().lower()
+
+
+def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
+    results: list[RuleResult] = []
+    if "firewall" in evidence:
+        firewall = evidence.get("firewall") or {}
+        public_enabled = _bool(firewall.get("public", True))
+        results.append(
+            RuleResult(
+                rule_id="FIREWALL_PUBLIC_DISABLED",
+                control="firewall",
+                title="Cortafuegos publico desactivado",
+                severity="Alto",
+                triggered=not public_enabled,
+                evidence={"public": firewall.get("public")},
+                recommendation="Activar el perfil publico del cortafuegos y verificar nuevamente.",
+                closure_criteria="El perfil publico aparece activo en una nueva evidencia.",
+            )
+        )
+    else:
+        firewall = {}
+
+    ports = evidence.get("listening_ports") or []
+    services = evidence.get("services") or []
+    port_3389 = any(int(item.get("port", item)) == 3389 for item in ports if str(item.get("port", item)).isdigit())
+    term_service = any(
+        str(item.get("name", "")).lower() == "termservice" and _bool(item.get("running", False))
+        for item in services
+        if isinstance(item, dict)
+    )
+    if "listening_ports" in evidence or "services" in evidence:
+        results.append(
+            RuleResult(
+                rule_id="RDP_EXPOSED",
+                control="ports",
+                title="RDP activo o puerto 3389 expuesto",
+                severity="Alto",
+                triggered=port_3389 or term_service,
+                evidence={"port_3389_listening": port_3389, "termservice_running": term_service},
+                recommendation="Restringir RDP, detenerlo si no se usa o bloquear el puerto segun necesidad.",
+                closure_criteria="El servicio o la exposicion deja de cumplir la condicion.",
+            )
+        )
+
+    risky = [
+        item
+        for item in services
+        if isinstance(item, dict)
+        and item.get("name") in RISKY_SERVICES
+        and item.get("name") != "TermService"
+        and _bool(item.get("running", False))
+    ]
+    if "services" in evidence:
+        results.append(
+            RuleResult(
+                rule_id="RISKY_SERVICE_ENABLED",
+                control="services",
+                title="Servicio remoto de riesgo habilitado",
+                severity="Alto",
+                triggered=bool(risky),
+                evidence={"services": risky},
+                recommendation="Deshabilitar servicios remotos que no sean necesarios para la operacion.",
+                closure_criteria="Los servicios definidos como riesgo aparecen detenidos o deshabilitados.",
+            )
+        )
+
+    if "local_administrators" in evidence or "local_admins" in evidence:
+        admins = evidence.get("local_administrators") or evidence.get("local_admins") or []
+        unauthorized = [name for name in admins if _admin_name(name) not in AUTHORIZED_ADMIN_NAMES]
+        results.append(
+            RuleResult(
+                rule_id="UNAUTHORIZED_LOCAL_ADMIN",
+                control="administrators",
+                title="Cuenta no autorizada como administrador local",
+                severity="Alto",
+                triggered=bool(unauthorized),
+                evidence={"unauthorized_accounts": unauthorized},
+                recommendation="Retirar del grupo Administradores las cuentas que no esten autorizadas.",
+                closure_criteria="La cuenta ya no aparece dentro del grupo Administradores.",
+            )
+        )
+
+    if "updates" in evidence:
+        updates = evidence.get("updates") or {}
+        pending_count = int(updates.get("pending_count") or 0)
+        results.append(
+            RuleResult(
+                rule_id="UPDATES_PENDING",
+                control="updates",
+                title="Actualizaciones pendientes",
+                severity="Alto" if pending_count >= 3 else "Medio",
+                triggered=pending_count > 0 or _bool(updates.get("reboot_pending", False)),
+                evidence={"pending_count": pending_count, "reboot_pending": updates.get("reboot_pending")},
+                recommendation="Instalar actualizaciones pendientes y reiniciar cuando corresponda.",
+                closure_criteria="No quedan pendientes y no existe reinicio requerido segun nueva consulta.",
+            )
+        )
+
+    if "antivirus" in evidence:
+        antivirus = evidence.get("antivirus") or {}
+        av_bad = not _bool(antivirus.get("enabled", True)) or not _bool(antivirus.get("real_time", True))
+        results.append(
+            RuleResult(
+                rule_id="ANTIVIRUS_DISABLED",
+                control="antivirus",
+                title="Antivirus o proteccion en tiempo real desactivada",
+                severity="Critico",
+                triggered=av_bad,
+                evidence={"enabled": antivirus.get("enabled"), "real_time": antivirus.get("real_time")},
+                recommendation="Activar la proteccion antivirus y la proteccion en tiempo real.",
+                closure_criteria="El antivirus y la proteccion en tiempo real aparecen activos.",
+            )
+        )
+
+    if "backup" in evidence:
+        backup = evidence.get("backup") or {}
+        exists = _bool(backup.get("exists", False))
+        days = backup.get("days_since_last_backup")
+        too_old = days is None or int(days) > 7
+        results.append(
+            RuleResult(
+                rule_id="BACKUP_OLD_OR_MISSING",
+                control="backup",
+                title="Respaldo inexistente o mayor a siete dias",
+                severity="Alto",
+                triggered=(not exists) or too_old,
+                evidence={"exists": backup.get("exists"), "days_since_last_backup": days, "latest_size": backup.get("latest_size")},
+                recommendation="Ejecutar un respaldo valido y confirmar que exista un archivo reciente y no vacio.",
+                closure_criteria="Existe un archivo de respaldo reciente y no vacio.",
+            )
+        )
+    return results
