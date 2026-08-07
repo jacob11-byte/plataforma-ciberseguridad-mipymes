@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
+from .ai_service import answer_company_question, answer_device_question, company_ai_summary, device_ai_summary
 from .rules import evaluate_rules
 from .storage import connect, generate_device_id, generate_token, init_db, insert_returning_id, json_dumps
 
@@ -95,6 +96,10 @@ class TaskRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class AiChatRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=500)
 
 
 @app.on_event("startup")
@@ -654,6 +659,34 @@ def dashboard(request: Request) -> dict[str, Any]:
                 "resolved": len([finding for finding in findings if finding["status"] == "resolved"]),
             },
         }
+
+
+@app.get("/api/ai/company-summary")
+def ai_company_summary(request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        return company_ai_summary(db)
+
+
+@app.post("/api/ai/company-chat")
+def ai_company_chat(payload: AiChatRequest, request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        return answer_company_question(db, payload.question)
+
+
+@app.get("/api/devices/{device_id}/ai-summary")
+def ai_device_summary(device_id: str, request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        return device_ai_summary(db, device_id)
+
+
+@app.post("/api/devices/{device_id}/ai-chat")
+def ai_device_chat(device_id: str, payload: AiChatRequest, request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        return answer_device_question(db, device_id, payload.question)
 
 
 def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str, Any]:

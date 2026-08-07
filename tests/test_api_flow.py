@@ -234,6 +234,36 @@ class ApiFlowTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
 
+    def test_ai_summary_uses_existing_evidence(self):
+        registered = self.register_agent()
+        evidence = {
+            "system_info": {"hostname": "DESKTOP-REAL", "windows_edition": "Windows 10 Pro", "architecture": "AMD64"},
+            "firewall": {"domain": True, "private": True, "public": False},
+            "scan_metadata": {"duration_ms": 100, "modules_success": 1, "modules_error": 0, "modules": []},
+        }
+        response = self.client.post(
+            "/api/agent/results",
+            headers=self.auth_header(registered["token"]),
+            json={"device_id": registered["device_id"], "scan_type": "FULL_SCAN", "evidence": evidence},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.login()
+        summary = self.client.get(f"/api/devices/{registered['device_id']}/ai-summary")
+        self.assertEqual(summary.status_code, 200, summary.text)
+        data = summary.json()
+        self.assertFalse(data["insufficient_evidence"])
+        self.assertGreaterEqual(len(data["priorities"]), 1)
+        self.assertGreaterEqual(len(data["evidence_refs"]), 1)
+
+        chat = self.client.post(
+            f"/api/devices/{registered['device_id']}/ai-chat",
+            json={"question": "Que deberia corregir primero?"},
+        )
+        self.assertEqual(chat.status_code, 200, chat.text)
+        answer = chat.json()
+        self.assertIn("Primero corrige", answer["answer"])
+        self.assertGreaterEqual(len(answer["evidence_refs"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

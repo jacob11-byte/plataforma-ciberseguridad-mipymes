@@ -367,6 +367,49 @@ tbody tr:hover { background: #fbfdff; }
   border-bottom: 1px solid #edf1f6;
 }
 
+.module-shell {
+  min-height: 520px;
+}
+
+.module-tabs {
+  margin-bottom: 20px;
+}
+
+.ai-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.ai-chat {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #edf1f6;
+}
+
+.ai-chat h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.quick-questions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-chat-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.ai-answer {
+  margin: 0;
+}
+
 .tab {
   background: #ffffff;
   border-color: #c7d0df;

@@ -1,7 +1,8 @@
-const state = { detail: null, tab: "resumen" };
+const state = { detail: null, ai: null, tab: "resumen" };
 
 const tabs = [
   ["resumen", "Resumen"],
+  ["analista", "Analista IA"],
   ["sistema", "Informacion del equipo"],
   ["inventario", "Inventario"],
   ["firewall", "Firewall"],
@@ -131,7 +132,15 @@ async function loadDetail() {
     return;
   }
   state.detail = await response.json();
+  await loadDeviceAi();
   render();
+}
+
+async function loadDeviceAi() {
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceIdFromPath())}/ai-summary`);
+  if (response.ok) {
+    state.ai = await response.json();
+  }
 }
 
 function render() {
@@ -159,11 +168,46 @@ function render() {
     });
   });
   document.getElementById("tabContent").innerHTML = renderTab();
+  attachTabHandlers();
+}
+
+function attachTabHandlers() {
+  const aiForm = document.getElementById("aiChatForm");
+  if (aiForm) {
+    aiForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = document.getElementById("aiQuestion");
+      await askDeviceAi(input.value);
+      input.value = "";
+    });
+  }
+  document.querySelectorAll(".ai-question").forEach((button) => {
+    button.addEventListener("click", () => askDeviceAi(button.dataset.question));
+  });
+}
+
+async function askDeviceAi(question) {
+  const answer = document.getElementById("aiAnswer");
+  if (!answer) return;
+  answer.textContent = "Analizando evidencia almacenada...";
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceIdFromPath())}/ai-chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!response.ok) {
+    answer.textContent = "No se pudo consultar el Analista IA.";
+    return;
+  }
+  const data = await response.json();
+  const refs = (data.evidence_refs || []).map((ref) => `${ref.type} #${ref.id}`).join(", ");
+  answer.innerHTML = `<strong>Respuesta:</strong> ${escapeHtml(data.answer)}${refs ? `<div class="muted">Respaldado por: ${escapeHtml(refs)}</div>` : ""}`;
 }
 
 function renderTab() {
   const data = state.detail;
   if (state.tab === "resumen") return renderSummary(data);
+  if (state.tab === "analista") return renderAiTab();
   if (state.tab === "sistema") return renderObject("Informacion del equipo", controlData("system_info"));
   if (state.tab === "inventario") return renderModuleObject("Inventario avanzado", controlData("system_inventory_v2"));
   if (state.tab === "firewall") return renderObject("Firewall", controlData("firewall"));
@@ -183,6 +227,46 @@ function renderTab() {
   if (state.tab === "evidencias") return renderEvidences(data.evidences);
   if (state.tab === "historial") return renderHistory(data.history);
   return noEvaluado();
+}
+
+function renderAiTab() {
+  const ai = state.ai || {};
+  return `
+    <div class="section-title">
+      <div>
+        <h2>Analista IA</h2>
+        <p>Analisis basado solamente en evidencia almacenada de esta computadora.</p>
+      </div>
+      <span class="badge ${ai.insufficient_evidence ? "medium" : "ok"}">${escapeHtml(ai.risk_level || "sin evidencia")}</span>
+    </div>
+    <div class="ai-grid">
+      ${aiCard("Resumen IA", ai.summary || "No existe evidencia suficiente para determinarlo.")}
+      ${aiListCard("Prioridades", (ai.priorities || []).map((item) => `${item.title}: ${item.recommendation}`))}
+      ${aiListCard("Cambios relevantes", ai.changes || [])}
+      ${aiListCard("Posibles anomalias", ai.anomalies || [])}
+      ${aiListCard("Recomendaciones", ai.recommendations || [])}
+    </div>
+    <section class="ai-chat">
+      <h3>Chat contextual</h3>
+      <div class="quick-questions">
+        ${["¿Por que este equipo tiene riesgo alto?", "¿Que cambio desde el ultimo analisis?", "¿Que deberia corregir primero?"].map((q) => `<button class="small secondary ai-question" data-question="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}
+      </div>
+      <form id="aiChatForm" class="ai-chat-form">
+        <input id="aiQuestion" placeholder="Pregunta sobre esta computadora">
+        <button type="submit">Preguntar</button>
+      </form>
+      <div id="aiAnswer" class="ai-answer empty-state">La IA respondera solo con evidencia existente.</div>
+    </section>
+  `;
+}
+
+function aiCard(title, content) {
+  return `<article class="status-card ok"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(content)}</p></article>`;
+}
+
+function aiListCard(title, items) {
+  const list = items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : `<p>No existe evidencia suficiente para determinarlo.</p>`;
+  return `<article class="status-card medium"><strong>${escapeHtml(title)}</strong>${list}</article>`;
 }
 
 function controlData(name) {
