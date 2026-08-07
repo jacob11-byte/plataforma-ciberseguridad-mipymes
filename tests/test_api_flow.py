@@ -63,6 +63,12 @@ class ApiFlowTest(unittest.TestCase):
         self.assertEqual(data["summary"]["devices"], 1)
         self.assertNotIn("token", data["devices"][0])
 
+    def test_dashboard_static_modules_are_served(self):
+        self.login()
+        module = self.client.get("/static/modules/dashboardModules.js")
+        self.assertEqual(module.status_code, 200, module.text)
+        self.assertIn("application/javascript", module.headers["content-type"])
+
     def test_invalid_agent_auth_is_rejected(self):
         registered = self.register_agent()
         response = self.client.post(

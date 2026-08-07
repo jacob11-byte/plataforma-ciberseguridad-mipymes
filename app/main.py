@@ -214,6 +214,16 @@ def script() -> FileResponse:
     return FileResponse(WEB_DIR / "app.js", media_type="application/javascript")
 
 
+@app.get("/static/modules/{filename}")
+def module_script(filename: str) -> FileResponse:
+    if "/" in filename or "\\" in filename or not filename.endswith(".js"):
+        raise HTTPException(status_code=404, detail="Modulo no encontrado")
+    path = WEB_DIR / "modules" / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Modulo no encontrado")
+    return FileResponse(path, media_type="application/javascript")
+
+
 @app.get("/static/device.js")
 def device_script() -> FileResponse:
     return FileResponse(WEB_DIR / "device.js", media_type="application/javascript")
