@@ -91,6 +91,14 @@ Para instalar una tarea programada que consulte verificaciones pendientes cada 1
 powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1
 ```
 
+Si Windows niega permisos porque ya existe una tarea elevada, instala una tarea de usuario con otro nombre:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1 -TaskName "CyberCheck MIPYME Agent User"
+```
+
+Para instalarla con privilegios elevados, abre PowerShell como administrador y agrega `-RunElevated`.
+
 ## Pruebas
 
 ```powershell
