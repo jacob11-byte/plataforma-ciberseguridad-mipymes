@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .rules import evaluate_rules
@@ -22,8 +21,10 @@ ALLOWED_TASKS = {
     "VERIFY_BACKUP",
 }
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+WEB_DIR = BASE_DIR / "web"
+
 app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
-app.mount("/static", StaticFiles(directory="web"), name="static")
 
 
 class RegisterRequest(BaseModel):
@@ -65,7 +66,17 @@ def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(Path("web/index.html"))
+    return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/static/styles.css")
+def styles() -> FileResponse:
+    return FileResponse(WEB_DIR / "styles.css", media_type="text/css")
+
+
+@app.get("/static/app.js")
+def script() -> FileResponse:
+    return FileResponse(WEB_DIR / "app.js", media_type="application/javascript")
 
 
 @app.post("/api/register")
