@@ -1,7 +1,22 @@
 const state = { dashboard: null };
 
+async function ensureSession() {
+  const response = await fetch("/api/me");
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return false;
+  }
+  const data = await response.json();
+  document.getElementById("currentUser").textContent = data.username;
+  return true;
+}
+
 async function loadDashboard() {
   const response = await fetch("/api/dashboard");
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
   state.dashboard = await response.json();
   render();
 }
@@ -50,6 +65,10 @@ function render() {
 }
 
 document.getElementById("refreshBtn").addEventListener("click", loadDashboard);
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  await fetch("/api/logout", { method: "POST" });
+  window.location.href = "/login";
+});
 document.getElementById("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   await fetch("/api/tasks", {
@@ -64,4 +83,8 @@ document.getElementById("taskForm").addEventListener("submit", async (event) => 
   await loadDashboard();
 });
 
-loadDashboard();
+ensureSession().then((ok) => {
+  if (ok) {
+    loadDashboard();
+  }
+});

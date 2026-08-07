@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import os
 from pathlib import Path
+import secrets
+import time
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from .rules import evaluate_rules
@@ -23,6 +29,8 @@ ALLOWED_TASKS = {
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
+SESSION_COOKIE = "cybercheck_session"
+SESSION_MAX_AGE = 60 * 60 * 8
 
 app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
 
@@ -48,9 +56,67 @@ class TaskRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+
+
+def _admin_username() -> str:
+    return os.getenv("ADMIN_USERNAME", "admin")
+
+
+def _admin_password() -> str:
+    return os.getenv("ADMIN_PASSWORD", "admin123")
+
+
+def _session_secret() -> str:
+    configured = os.getenv("SESSION_SECRET")
+    if configured:
+        return configured
+    return _admin_password()
+
+
+def _sign(value: str) -> str:
+    signature = hmac.new(_session_secret().encode("utf-8"), value.encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+
+
+def _create_session(username: str) -> str:
+    expires = str(int(time.time()) + SESSION_MAX_AGE)
+    nonce = secrets.token_urlsafe(12)
+    payload = f"{username}|{expires}|{nonce}"
+    token = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"{token}.{_sign(token)}"
+
+
+def _read_session(request: Request) -> str | None:
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if not cookie or "." not in cookie:
+        return None
+    token, signature = cookie.rsplit(".", 1)
+    if not hmac.compare_digest(signature, _sign(token)):
+        return None
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        payload = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        username, expires, _nonce = payload.split("|", 2)
+    except ValueError:
+        return None
+    if int(expires) < int(time.time()):
+        return None
+    return username
+
+
+def _require_user(request: Request) -> str:
+    username = _read_session(request)
+    if not username:
+        raise HTTPException(status_code=401, detail="Sesion requerida")
+    return username
 
 
 def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
@@ -65,8 +131,17 @@ def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
 
 
 @app.get("/")
-def index() -> FileResponse:
+def index(request: Request):
+    if not _read_session(request):
+        return RedirectResponse("/login", status_code=302)
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/login")
+def login_page(request: Request):
+    if _read_session(request):
+        return RedirectResponse("/", status_code=302)
+    return FileResponse(WEB_DIR / "login.html")
 
 
 @app.get("/static/styles.css")
@@ -77,6 +152,36 @@ def styles() -> FileResponse:
 @app.get("/static/app.js")
 def script() -> FileResponse:
     return FileResponse(WEB_DIR / "app.js", media_type="application/javascript")
+
+
+@app.post("/api/login")
+def login(payload: LoginRequest) -> JSONResponse:
+    valid_user = hmac.compare_digest(payload.username, _admin_username())
+    valid_password = hmac.compare_digest(payload.password, _admin_password())
+    if not valid_user or not valid_password:
+        raise HTTPException(status_code=401, detail="Credenciales invalidas")
+    response = JSONResponse({"ok": True, "username": payload.username})
+    response.set_cookie(
+        SESSION_COOKIE,
+        _create_session(payload.username),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/api/logout")
+def logout() -> Response:
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+@app.get("/api/me")
+def me(request: Request) -> dict[str, Any]:
+    return {"username": _require_user(request)}
 
 
 @app.post("/api/register")
@@ -209,7 +314,8 @@ def agent_tasks(device_id: str, authorization: str | None = Header(default=None)
 
 
 @app.post("/api/tasks")
-def create_task(payload: TaskRequest) -> dict[str, Any]:
+def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
+    _require_user(request)
     if payload.task_type not in ALLOWED_TASKS:
         raise HTTPException(status_code=400, detail="Tipo de tarea no permitido")
     with connect() as db:
@@ -237,7 +343,8 @@ def complete_task(task_id: int, request: Request, authorization: str | None = He
 
 
 @app.get("/api/dashboard")
-def dashboard() -> dict[str, Any]:
+def dashboard(request: Request) -> dict[str, Any]:
+    _require_user(request)
     with connect() as db:
         return {
             "devices": [dict(row) for row in db.execute("SELECT * FROM devices ORDER BY last_seen DESC NULLS LAST")],

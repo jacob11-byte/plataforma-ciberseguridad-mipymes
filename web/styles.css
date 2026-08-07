@@ -23,7 +23,7 @@ h1 { font-size: 26px; }
 h2 { font-size: 18px; }
 p { color: #5c6b82; margin-top: 5px; }
 
-button, select {
+button, select, input {
   min-height: 38px;
   border: 1px solid #c7d0df;
   border-radius: 6px;
@@ -38,6 +38,18 @@ button {
   border-color: #176b87;
   cursor: pointer;
   font-weight: 650;
+}
+
+button.secondary {
+  background: #ffffff;
+  border-color: #c7d0df;
+  color: #172033;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 main {
@@ -112,9 +124,46 @@ th { color: #526179; font-size: 12px; text-transform: uppercase; }
 .timeline { display: grid; gap: 10px; margin-top: 12px; }
 .event { border-left: 3px solid #176b87; padding: 6px 0 6px 10px; color: #34445c; }
 .muted { color: #6a788d; font-size: 13px; }
+.error { color: #9b1128; font-size: 14px; }
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #eef3f8;
+}
+
+.login-shell {
+  width: min(100% - 32px, 420px);
+  margin: 0;
+}
+
+.login-panel {
+  display: grid;
+  gap: 22px;
+  background: #ffffff;
+  border: 1px solid #d7dfeb;
+  border-radius: 8px;
+  padding: 28px;
+}
+
+.login-form,
+.login-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.login-form label {
+  color: #34445c;
+  font-size: 14px;
+}
+
+.login-form input {
+  width: 100%;
+}
 
 @media (max-width: 760px) {
-  .topbar, .section-title { align-items: stretch; flex-direction: column; }
+  .topbar, .topbar-actions, .section-title { align-items: stretch; flex-direction: column; }
   .metrics, .grid { grid-template-columns: 1fr; }
   main { width: min(100% - 20px, 1180px); }
 }

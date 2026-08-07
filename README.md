@@ -42,8 +42,17 @@ Start command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
 4. En Environment agrega `DATABASE_URL` con la Internal Database URL de Render.
+5. Agrega tambien credenciales del panel:
+
+```text
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=elige-una-contrasena-segura
+SESSION_SECRET=un-texto-largo-aleatorio
+```
 
 Si `DATABASE_URL` existe, la app usa PostgreSQL. Si no existe, usa SQLite local en `data/cybercheck.db`.
+
+En desarrollo local, si no configuras esas variables, el login usa `admin` / `admin123`.
 
 Al iniciar se crea un equipo demo:
 
