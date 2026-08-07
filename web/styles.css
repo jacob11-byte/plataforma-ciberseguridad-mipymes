@@ -99,6 +99,44 @@ th { color: #526179; font-size: 12px; text-transform: uppercase; }
   gap: 12px;
 }
 
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.status-card {
+  border: 1px solid #dde3ee;
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 14px;
+  background: #ffffff;
+}
+
+.status-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.status-card p {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.status-card ul {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: #34445c;
+  font-size: 13px;
+}
+
+.status-card.ok { border-left-color: #1f8a55; }
+.status-card.medium { border-left-color: #1e6fa8; }
+.status-card.high { border-left-color: #d38b00; }
+.status-card.critical { border-left-color: #c5253a; }
+
 .finding {
   border: 1px solid #dde3ee;
   border-radius: 8px;
@@ -150,6 +188,10 @@ th { color: #526179; font-size: 12px; text-transform: uppercase; }
 .pending, .delivered { background: #dceeff; color: #155b89; }
 .completed { background: #dff7ea; color: #146b3a; }
 .failed { background: #ffd9de; color: #9b1128; }
+.badge.ok { background: #dff7ea; color: #146b3a; }
+.badge.medium { background: #dceeff; color: #155b89; }
+.badge.high { background: #fff0c2; color: #744b00; }
+.badge.critical { background: #ffd9de; color: #9b1128; }
 .Critico { background: #ffd9de; color: #9b1128; }
 .Alto { background: #fff0c2; color: #744b00; }
 .Medio { background: #dceeff; color: #155b89; }

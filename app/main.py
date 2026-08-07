@@ -25,6 +25,7 @@ ALLOWED_TASKS = {
     "VERIFY_ADMINISTRATORS",
     "VERIFY_UPDATES",
     "VERIFY_ANTIVIRUS",
+    "VERIFY_DEVICES",
     "VERIFY_BACKUP",
 }
 
@@ -290,6 +291,11 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
             "INSERT INTO scans(device_id, scan_type, status) VALUES (?, ?, 'completed')",
             (payload.device_id, payload.scan_type),
         )
+        for control, value in status_evidence(payload.evidence).items():
+            db.execute(
+                "INSERT INTO evidences(scan_id, device_id, control, result_json) VALUES (?, ?, ?, ?)",
+                (scan_id, payload.device_id, f"status_{control}", json_dumps(value)),
+            )
         for result in rule_results:
             db.execute(
                 "INSERT INTO evidences(scan_id, device_id, control, result_json) VALUES (?, ?, ?, ?)",
@@ -452,6 +458,20 @@ def device_view(row: dict[str, Any]) -> dict[str, Any]:
         row["agent_status"] = "online"
         row["agent_status_label"] = "En linea"
     return row
+
+
+def status_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    controls = {}
+    for key in ("firewall", "updates", "antivirus", "backup", "connected_devices"):
+        if key in evidence:
+            controls[key] = evidence[key]
+    if "listening_ports" in evidence:
+        controls["ports"] = evidence["listening_ports"]
+    if "services" in evidence:
+        controls["services"] = evidence["services"]
+    if "local_administrators" in evidence:
+        controls["administrators"] = evidence["local_administrators"]
+    return controls
 
 
 def parse_timestamp(value: Any) -> datetime | None:

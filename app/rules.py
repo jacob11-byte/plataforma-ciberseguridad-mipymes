@@ -149,7 +149,17 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
     if "antivirus" in evidence:
         antivirus = evidence.get("antivirus") or {}
         av_unknown = antivirus.get("status") in {"not_supported", "unavailable", "error"}
-        av_bad = False if av_unknown else (not _bool(antivirus.get("enabled", True)) or not _bool(antivirus.get("real_time", True)))
+        preferences = antivirus.get("preferences") or {}
+        realtime_disabled_by_policy = _bool(preferences.get("DisableRealtimeMonitoring", False))
+        behavior_disabled_by_policy = _bool(preferences.get("DisableBehaviorMonitoring", False))
+        ioav_disabled_by_policy = _bool(preferences.get("DisableIOAVProtection", False))
+        av_bad = False if av_unknown else (
+            not _bool(antivirus.get("enabled", True))
+            or not _bool(antivirus.get("real_time", True))
+            or realtime_disabled_by_policy
+            or behavior_disabled_by_policy
+            or ioav_disabled_by_policy
+        )
         results.append(
             RuleResult(
                 rule_id="ANTIVIRUS_DISABLED",
@@ -157,7 +167,15 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
                 title="Antivirus o proteccion en tiempo real desactivada",
                 severity="Critico",
                 triggered=av_bad,
-                evidence={"enabled": antivirus.get("enabled"), "real_time": antivirus.get("real_time")},
+                evidence={
+                    "name": antivirus.get("name"),
+                    "enabled": antivirus.get("enabled"),
+                    "real_time": antivirus.get("real_time"),
+                    "on_access_protection": antivirus.get("on_access_protection"),
+                    "behavior_monitor": antivirus.get("behavior_monitor"),
+                    "ioav_protection": antivirus.get("ioav_protection"),
+                    "preferences": preferences,
+                },
                 recommendation="Activar la proteccion antivirus y la proteccion en tiempo real.",
                 closure_criteria="El antivirus y la proteccion en tiempo real aparecen activos.",
             )
@@ -173,6 +191,7 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
                 evidence={
                     "signature_age_days": signature_age,
                     "signature_last_updated": antivirus.get("signature_last_updated"),
+                    "signatures_out_of_date": antivirus.get("signatures_out_of_date"),
                 },
                 recommendation="Actualizar las firmas del antivirus desde Seguridad de Windows o Windows Update.",
                 closure_criteria="La edad de firmas aparece en siete dias o menos.",
@@ -210,6 +229,57 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
                 },
                 recommendation="Abrir Seguridad de Windows, revisar Proteccion contra virus y amenazas, aplicar las acciones recomendadas y ejecutar un nuevo escaneo.",
                 closure_criteria="El antivirus reporta cero amenazas activas en una nueva evidencia.",
+                )
+            )
+
+    if "connected_devices" in evidence:
+        connected = evidence.get("connected_devices") or {}
+        usb_storage = connected.get("usb_storage") or []
+        unsigned_drivers = connected.get("unsigned_drivers") or []
+        device_errors = connected.get("device_errors") or []
+        results.append(
+            RuleResult(
+                rule_id="USB_STORAGE_CONNECTED",
+                control="connected_devices",
+                title="Dispositivo de almacenamiento USB conectado",
+                severity="Medio",
+                triggered=bool(usb_storage),
+                evidence={
+                    "usb_storage_count": len(usb_storage),
+                    "usb_storage": usb_storage,
+                },
+                recommendation="Verificar que el USB sea de confianza y escanearlo con el antivirus antes de abrir archivos.",
+                closure_criteria="No aparece almacenamiento USB conectado o el dispositivo fue aprobado por el responsable.",
+            )
+        )
+        results.append(
+            RuleResult(
+                rule_id="UNSIGNED_DEVICE_DRIVER",
+                control="connected_devices",
+                title="Controlador de dispositivo sin firma detectado",
+                severity="Alto",
+                triggered=bool(unsigned_drivers),
+                evidence={
+                    "unsigned_driver_count": len(unsigned_drivers),
+                    "unsigned_drivers": unsigned_drivers,
+                },
+                recommendation="Actualizar o retirar controladores sin firma desde el fabricante oficial.",
+                closure_criteria="No aparecen controladores sin firma en una nueva verificacion.",
+            )
+        )
+        results.append(
+            RuleResult(
+                rule_id="DEVICE_WITH_ERROR",
+                control="connected_devices",
+                title="Dispositivo conectado con estado de error",
+                severity="Medio",
+                triggered=bool(device_errors),
+                evidence={
+                    "device_error_count": len(device_errors),
+                    "device_errors": device_errors,
+                },
+                recommendation="Revisar el Administrador de dispositivos y corregir o retirar dispositivos con error.",
+                closure_criteria="Los dispositivos presentes aparecen con estado OK.",
             )
         )
 

@@ -35,6 +35,7 @@
             <option>VERIFY_ADMINISTRATORS</option>
             <option>VERIFY_UPDATES</option>
             <option>VERIFY_ANTIVIRUS</option>
+            <option>VERIFY_DEVICES</option>
             <option>VERIFY_BACKUP</option>
           </select>
           <button type="submit">Solicitar verificacion</button>
@@ -47,6 +48,14 @@
           <tbody id="devices"></tbody>
         </table>
       </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <h2>Estado verificado</h2>
+        <span class="muted">Ultima evidencia real recibida del agente</span>
+      </div>
+      <div id="securityStatus" class="status-grid"></div>
     </section>
 
     <section class="panel">

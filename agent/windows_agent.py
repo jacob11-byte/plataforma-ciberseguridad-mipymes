@@ -25,6 +25,7 @@ ALLOWED_TASKS = {
     "VERIFY_ADMINISTRATORS",
     "VERIFY_UPDATES",
     "VERIFY_ANTIVIRUS",
+    "VERIFY_DEVICES",
     "VERIFY_BACKUP",
 }
 
@@ -221,7 +222,13 @@ def collect_antivirus() -> dict[str, Any]:
         "AMServiceEnabled,AntivirusEnabled,RealTimeProtectionEnabled,AntispywareEnabled,"
         "NISEnabled,AntivirusSignatureLastUpdated,AntispywareSignatureLastUpdated,"
         "QuickScanStartTime,QuickScanEndTime,FullScanStartTime,FullScanEndTime,"
-        "FullScanAge,QuickScanAge,AntivirusSignatureAge,ComputerState | ConvertTo-Json -Compress"
+        "FullScanAge,QuickScanAge,AntivirusSignatureAge,ComputerState,DefenderSignaturesOutOfDate,"
+        "IsTamperProtected,OnAccessProtectionEnabled,BehaviorMonitorEnabled,IoavProtectionEnabled | ConvertTo-Json -Compress"
+    )
+    preferences = run_powershell(
+        "Get-MpPreference -ErrorAction SilentlyContinue | Select-Object "
+        "DisableRealtimeMonitoring,DisableBehaviorMonitoring,DisableIOAVProtection,PUAProtection,"
+        "MAPSReporting,SubmitSamplesConsent,ScanScheduleDay,ScanScheduleTime | ConvertTo-Json -Compress"
     )
     threats = run_powershell(
         "Get-MpThreat -ErrorAction SilentlyContinue | Select-Object ThreatName,SeverityID,CategoryID,DidThreatExecute,IsActive,Resources | ConvertTo-Json -Compress"
@@ -245,6 +252,12 @@ def collect_antivirus() -> dict[str, Any]:
             "full_scan_age_days": defender.get("FullScanAge"),
             "full_scan_end_time": defender.get("FullScanEndTime"),
             "computer_state": defender.get("ComputerState"),
+            "tamper_protected": defender.get("IsTamperProtected"),
+            "on_access_protection": defender.get("OnAccessProtectionEnabled"),
+            "behavior_monitor": defender.get("BehaviorMonitorEnabled"),
+            "ioav_protection": defender.get("IoavProtectionEnabled"),
+            "signatures_out_of_date": defender.get("DefenderSignaturesOutOfDate"),
+            "preferences": preferences if isinstance(preferences, dict) and not preferences.get("error") else {},
             "threats": threat_rows,
             "active_threat_count": sum(1 for threat in threat_rows if isinstance(threat, dict) and threat.get("IsActive")),
         }
@@ -252,6 +265,45 @@ def collect_antivirus() -> dict[str, Any]:
         return {"enabled": False, "real_time": False, "error": data}
     state = int(data.get("productState") or 0)
     return {"enabled": state != 0, "real_time": state != 0, "name": data.get("displayName"), "product_state": state}
+
+
+def collect_connected_devices() -> dict[str, Any]:
+    if os.name != "nt":
+        return {"status": "not_supported", "devices": [], "usb_storage": [], "unsigned_drivers": []}
+    devices = run_powershell(
+        "$classes=@('USB','DiskDrive','Net','Camera','Bluetooth','HIDClass','Keyboard','Mouse','Ports','MEDIA'); "
+        "Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | "
+        "Where-Object { $classes -contains $_.Class } | "
+        "Select-Object -First 80 Class,FriendlyName,InstanceId,Status,Manufacturer | ConvertTo-Json -Compress"
+    )
+    usb_storage = run_powershell(
+        "Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.InterfaceType -eq 'USB' } | "
+        "Select-Object Model,SerialNumber,Size,MediaType,InterfaceType | ConvertTo-Json -Compress"
+    )
+    unsigned_drivers = run_powershell(
+        "Get-CimInstance Win32_PnPSignedDriver -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.IsSigned -eq $false -and $_.DeviceName } | "
+        "Select-Object -First 30 DeviceName,Manufacturer,DriverVersion,InfName,IsSigned | ConvertTo-Json -Compress"
+    )
+    device_rows = devices if isinstance(devices, list) else ([devices] if isinstance(devices, dict) and not devices.get("error") else [])
+    usb_rows = usb_storage if isinstance(usb_storage, list) else ([usb_storage] if isinstance(usb_storage, dict) and not usb_storage.get("error") else [])
+    unsigned_rows = unsigned_drivers if isinstance(unsigned_drivers, list) else ([unsigned_drivers] if isinstance(unsigned_drivers, dict) and not unsigned_drivers.get("error") else [])
+    device_errors = [
+        item for item in device_rows
+        if isinstance(item, dict) and str(item.get("Status", "")).upper() not in {"OK", "UNKNOWN", ""}
+    ]
+    return {
+        "status": "ok",
+        "devices": device_rows,
+        "device_count": len(device_rows),
+        "usb_storage": usb_rows,
+        "usb_storage_count": len(usb_rows),
+        "unsigned_drivers": unsigned_rows,
+        "unsigned_driver_count": len(unsigned_rows),
+        "device_errors": device_errors,
+        "device_error_count": len(device_errors),
+    }
 
 
 def collect_backup(path: str) -> dict[str, Any]:
@@ -286,6 +338,8 @@ def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
         evidence["updates"] = collect_updates()
     if task_type in {"FULL_SCAN", "VERIFY_ANTIVIRUS"}:
         evidence["antivirus"] = collect_antivirus()
+    if task_type in {"FULL_SCAN", "VERIFY_DEVICES"}:
+        evidence["connected_devices"] = collect_connected_devices()
     if task_type in {"FULL_SCAN", "VERIFY_BACKUP"}:
         evidence["backup"] = collect_backup(config.get("backup_path", "C:\\Backups"))
     return evidence
