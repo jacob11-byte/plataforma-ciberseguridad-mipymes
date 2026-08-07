@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS scans (
     device_id TEXT NOT NULL REFERENCES devices(device_id),
     scan_type TEXT NOT NULL,
     status TEXT NOT NULL,
+    completed_at TEXT,
+    duration_ms INTEGER,
+    modules_success INTEGER,
+    modules_error INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS evidences (
@@ -198,6 +202,17 @@ def migrate_db(db: Database) -> None:
     for name, column_type in additions.items():
         if name not in columns:
             db.execute(f"ALTER TABLE devices ADD COLUMN {name} {column_type}")
+
+    scan_columns = set(table_columns(db, "scans"))
+    scan_additions = {
+        "completed_at": "TIMESTAMPTZ" if db.is_postgres else "TEXT",
+        "duration_ms": "INTEGER",
+        "modules_success": "INTEGER",
+        "modules_error": "INTEGER",
+    }
+    for name, column_type in scan_additions.items():
+        if name not in scan_columns:
+            db.execute(f"ALTER TABLE scans ADD COLUMN {name} {column_type}")
 
     legacy_token = "de" + "mo" + "-token"
     credential_rows = db.execute("SELECT device_id, token FROM devices WHERE token <> ?", (legacy_token,)).fetchall()

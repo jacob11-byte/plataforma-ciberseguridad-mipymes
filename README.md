@@ -74,7 +74,7 @@ py -3.12 agent/windows_agent.py --config agent/agent_config.example.json --poll-
 Para dejar el agente escuchando tareas mientras pruebas el panel:
 
 ```powershell
-py -3.12 agent/windows_agent.py --config agent/agent_config.render.example.json --loop --interval 60 --max-tasks 2
+py -3.12 agent/windows_agent.py --config agent/agent_config.render.example.json --loop --interval 60 --max-tasks 10
 ```
 
 Para enviar evidencia real a la plataforma desplegada en Render:

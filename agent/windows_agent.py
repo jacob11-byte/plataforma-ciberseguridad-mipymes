@@ -321,27 +321,61 @@ def collect_backup(path: str) -> dict[str, Any]:
 
 
 def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
+    started = time.perf_counter()
+    module_status: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "agent_version": AGENT_VERSION,
         "system_info": system_info(),
     }
+
+    def collect_module(name: str, target_key: str, collector: Any) -> None:
+        module_started = time.perf_counter()
+        try:
+            result = collector()
+            evidence[target_key] = result
+            has_error = isinstance(result, dict) and bool(result.get("error"))
+            module_status.append(
+                {
+                    "module": name,
+                    "status": "error" if has_error else "ok",
+                    "duration_ms": int((time.perf_counter() - module_started) * 1000),
+                    "error": result.get("error") if isinstance(result, dict) else None,
+                }
+            )
+        except Exception as exc:
+            evidence[target_key] = {"status": "error", "error": str(exc)}
+            module_status.append(
+                {
+                    "module": name,
+                    "status": "error",
+                    "duration_ms": int((time.perf_counter() - module_started) * 1000),
+                    "error": str(exc),
+                }
+            )
+
     if task_type in {"FULL_SCAN", "VERIFY_FIREWALL"}:
-        evidence["firewall"] = collect_firewall()
+        collect_module("firewall", "firewall", collect_firewall)
     if task_type in {"FULL_SCAN", "VERIFY_PORTS"}:
-        evidence["listening_ports"] = collect_ports()
+        collect_module("ports", "listening_ports", collect_ports)
     if task_type in {"FULL_SCAN", "VERIFY_SERVICES"}:
-        evidence["services"] = collect_services(config.get("risk_services", ["TermService", "RemoteRegistry", "WinRM"]))
+        collect_module("services", "services", lambda: collect_services(config.get("risk_services", ["TermService", "RemoteRegistry", "WinRM"])))
     if task_type in {"FULL_SCAN", "VERIFY_ADMINISTRATORS"}:
-        evidence["local_administrators"] = collect_admins()
+        collect_module("administrators", "local_administrators", collect_admins)
     if task_type in {"FULL_SCAN", "VERIFY_UPDATES"}:
-        evidence["updates"] = collect_updates()
+        collect_module("updates", "updates", collect_updates)
     if task_type in {"FULL_SCAN", "VERIFY_ANTIVIRUS"}:
-        evidence["antivirus"] = collect_antivirus()
+        collect_module("antivirus", "antivirus", collect_antivirus)
     if task_type in {"FULL_SCAN", "VERIFY_DEVICES"}:
-        evidence["connected_devices"] = collect_connected_devices()
+        collect_module("connected_devices", "connected_devices", collect_connected_devices)
     if task_type in {"FULL_SCAN", "VERIFY_BACKUP"}:
-        evidence["backup"] = collect_backup(config.get("backup_path", "C:\\Backups"))
+        collect_module("backup", "backup", lambda: collect_backup(config.get("backup_path", "C:\\Backups")))
+    evidence["scan_metadata"] = {
+        "duration_ms": int((time.perf_counter() - started) * 1000),
+        "modules_success": sum(1 for item in module_status if item["status"] == "ok"),
+        "modules_error": sum(1 for item in module_status if item["status"] == "error"),
+        "modules": module_status,
+    }
     return evidence
 
 
@@ -372,13 +406,22 @@ def send_scan(config: dict[str, Any], task_type: str) -> dict[str, Any]:
 def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
     send_heartbeat(config)
     print("[OK] Heartbeat sent")
-    url = f"{config['api_url'].rstrip('/')}/api/agent/tasks?device_id={urllib.parse.quote(config['device_id'])}"
+    url = (
+        f"{config['api_url'].rstrip('/')}/api/agent/tasks"
+        f"?device_id={urllib.parse.quote(config['device_id'])}&max_tasks={max_tasks}"
+    )
     tasks = request_json("GET", url, config["token"]).get("tasks", [])[:max_tasks]
     if not tasks:
         print("No hay tareas pendientes.")
         return
+    seen_task_types = set()
     for task in tasks:
         try:
+            if task["task_type"] in seen_task_types:
+                print(f"[TASK] Skipping duplicate {task['id']}: {task['task_type']}")
+                request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
+                continue
+            seen_task_types.add(task["task_type"])
             print(f"[TASK] Executing {task['id']}: {task['task_type']}")
             send_scan(config, task["task_type"])
             request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
@@ -405,7 +448,7 @@ def main() -> int:
     parser.add_argument("--poll-once", action="store_true")
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--interval", type=int, default=60)
-    parser.add_argument("--max-tasks", type=int, default=3)
+    parser.add_argument("--max-tasks", type=int, default=10)
     parser.add_argument("--register", action="store_true")
     args = parser.parse_args()
     config_path = Path(args.config)

@@ -20,7 +20,7 @@ if ([string]::IsNullOrWhiteSpace($PythonExe)) {
 
 $action = New-ScheduledTaskAction `
     -Execute $PythonExe `
-    -Argument "-3.12 `"$agentPath`" --config `"$configFullPath`" --poll-once --max-tasks 1" `
+    -Argument "-3.12 `"$agentPath`" --config `"$configFullPath`" --poll-once --max-tasks 10" `
     -WorkingDirectory $projectRoot
 
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Detalle del equipo - CyberCheck MIPYME</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <a href="/" class="back-link">Volver</a>
+      <h1 id="deviceTitle">Equipo</h1>
+      <p id="deviceSubtitle">Consola de estado del endpoint</p>
+    </div>
+    <div class="topbar-actions">
+      <span id="currentUser" class="muted"></span>
+      <button id="refreshBtn">Actualizar</button>
+      <button id="logoutBtn" class="secondary">Salir</button>
+    </div>
+  </header>
+
+  <main class="device-main">
+    <section class="metrics" id="deviceMetrics"></section>
+    <section class="panel">
+      <div class="tabs" id="tabs"></div>
+      <div id="tabContent" class="tab-content"></div>
+    </section>
+  </main>
+
+  <script src="/static/device.js"></script>
+</body>
+</html>

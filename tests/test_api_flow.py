@@ -122,6 +122,49 @@ class ApiFlowTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_device_detail_keeps_status_evidence_and_scan_metadata(self):
+        registered = self.register_agent()
+        evidence = {
+            "timestamp": "2026-08-07T00:00:00+00:00",
+            "agent_version": "0.2.0",
+            "system_info": {"hostname": "DESKTOP-REAL", "windows_edition": "Windows 10 Pro", "architecture": "AMD64"},
+            "firewall": {"domain": True, "private": True, "public": True},
+            "antivirus": {"enabled": True, "real_time": True, "signature_age_days": 0, "quick_scan_age_days": 1, "active_threat_count": 0},
+            "scan_metadata": {"duration_ms": 1200, "modules_success": 2, "modules_error": 0, "modules": []},
+        }
+        response = self.client.post(
+            "/api/agent/results",
+            headers=self.auth_header(registered["token"]),
+            json={"device_id": registered["device_id"], "scan_type": "FULL_SCAN", "evidence": evidence},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.login()
+        detail = self.client.get(f"/api/devices/{registered['device_id']}/detail")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        data = detail.json()
+        self.assertEqual(data["summary"]["last_scan_duration_ms"], 1200)
+        self.assertEqual(data["summary"]["modules_success"], 2)
+        self.assertIn("firewall", data["controls"])
+        statuses = {item["control"]: item["status"] for item in data["control_matrix"]}
+        self.assertEqual(statuses["firewall"], "PASS")
+        self.assertEqual(statuses["antivirus"], "PASS")
+
+    def test_agent_gets_up_to_ten_pending_tasks(self):
+        registered = self.register_agent()
+        self.login()
+        for task_type in ["VERIFY_FIREWALL", "VERIFY_PORTS", "VERIFY_ANTIVIRUS", "VERIFY_UPDATES", "VERIFY_BACKUP"]:
+            response = self.client.post(
+                "/api/tasks",
+                json={"device_id": registered["device_id"], "task_type": task_type, "parameters": {}},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.get(
+            f"/api/agent/tasks?device_id={registered['device_id']}&max_tasks=10",
+            headers=self.auth_header(registered["token"]),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["tasks"]), 5)
+
 
 if __name__ == "__main__":
     unittest.main()

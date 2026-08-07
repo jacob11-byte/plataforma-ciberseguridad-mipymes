@@ -44,7 +44,7 @@ function render() {
   document.getElementById("emptyDevices").hidden = devices.length !== 0;
   document.getElementById("devices").innerHTML = devices.map((d) => `
     <tr>
-      <td><strong>${d.name || d.hostname || d.device_id}</strong><div class="muted">${d.device_id}</div></td>
+      <td><a class="device-link" href="/devices/${encodeURIComponent(d.device_id)}"><strong>${d.name || d.hostname || d.device_id}</strong></a><div class="muted">${d.device_id}</div></td>
       <td>${d.windows_edition || d.os_version || "Sin dato"}<div class="muted">${d.architecture || ""}</div></td>
       <td><span class="status ${d.agent_status}">${d.agent_status_label || "Sin conexion"}</span><div class="muted">${d.agent_version || "sin version"}</div></td>
       <td>${d.last_seen || "Sin contacto"}</td>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import secrets
@@ -10,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,19 @@ ALLOWED_TASKS = {
     "VERIFY_ANTIVIRUS",
     "VERIFY_DEVICES",
     "VERIFY_BACKUP",
+}
+
+CONTROL_TABS = {
+    "system_info": "Sistema",
+    "firewall": "Firewall",
+    "ports": "Puertos",
+    "services": "Servicios",
+    "administrators": "Administradores",
+    "updates": "Windows Update",
+    "antivirus": "Antivirus",
+    "threats": "Amenazas",
+    "backup": "Backups",
+    "connected_devices": "Dispositivos",
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -160,6 +174,13 @@ def index(request: Request):
     return FileResponse(WEB_DIR / "index.html")
 
 
+@app.get("/devices/{device_id}")
+def device_page(device_id: str, request: Request):
+    if not _read_session(request):
+        return RedirectResponse("/login", status_code=302)
+    return FileResponse(WEB_DIR / "device.html")
+
+
 @app.get("/login")
 def login_page(request: Request):
     if _read_session(request):
@@ -175,6 +196,11 @@ def styles() -> FileResponse:
 @app.get("/static/app.js")
 def script() -> FileResponse:
     return FileResponse(WEB_DIR / "app.js", media_type="application/javascript")
+
+
+@app.get("/static/device.js")
+def device_script() -> FileResponse:
+    return FileResponse(WEB_DIR / "device.js", media_type="application/javascript")
 
 
 @app.post("/api/login")
@@ -289,8 +315,17 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
             )
         scan_id = insert_returning_id(
             db,
-            "INSERT INTO scans(device_id, scan_type, status) VALUES (?, ?, 'completed')",
-            (payload.device_id, payload.scan_type),
+            """
+            INSERT INTO scans(device_id, scan_type, status, completed_at, duration_ms, modules_success, modules_error)
+            VALUES (?, ?, 'completed', CURRENT_TIMESTAMP, ?, ?, ?)
+            """,
+            (
+                payload.device_id,
+                payload.scan_type,
+                _int_or_none((payload.evidence.get("scan_metadata") or {}).get("duration_ms")),
+                _int_or_none((payload.evidence.get("scan_metadata") or {}).get("modules_success")),
+                _int_or_none((payload.evidence.get("scan_metadata") or {}).get("modules_error")),
+            ),
         )
         for control, value in status_evidence(payload.evidence).items():
             db.execute(
@@ -364,17 +399,21 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
 
 
 @app.get("/api/agent/tasks")
-def agent_tasks(device_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def agent_tasks(
+    device_id: str,
+    max_tasks: int = Query(default=10, ge=1, le=10),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
     _device_for_token(device_id, authorization)
     with connect() as db:
         rows = db.execute(
             """
             SELECT * FROM tasks
-            WHERE device_id = ? AND status IN ('pending', 'delivered')
+            WHERE device_id = ? AND status = 'pending'
             ORDER BY created_at
-            LIMIT 3
+            LIMIT ?
             """,
-            (device_id,),
+            (device_id, max_tasks),
         ).fetchall()
         db.execute(
             "UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE device_id=? AND status='pending'",
@@ -419,8 +458,77 @@ def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
         ),
         "commands": [
             "Start-ScheduledTask -TaskName \"CyberCheck MIPYME Agent User\"",
-            "cd C:\\pg2; py -3.12 agent\\windows_agent.py --config agent\\agent_config.render.json --poll-once --max-tasks 3",
+            "cd C:\\pg2; py -3.12 agent\\windows_agent.py --config agent\\agent_config.render.json --poll-once --max-tasks 10",
         ],
+    }
+
+
+@app.get("/api/devices/{device_id}/detail")
+def device_detail(device_id: str, request: Request) -> dict[str, Any]:
+    _require_user(request)
+    with connect() as db:
+        device = db.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        if not device:
+            raise HTTPException(status_code=404, detail="Equipo no existe")
+        device_row = device_view(dict(device))
+        scans = [dict(row) for row in db.execute(
+            "SELECT * FROM scans WHERE device_id=? ORDER BY created_at DESC LIMIT 50",
+            (device_id,),
+        ).fetchall()]
+        tasks = [dict(row) for row in db.execute(
+            "SELECT * FROM tasks WHERE device_id=? ORDER BY created_at DESC LIMIT 50",
+            (device_id,),
+        ).fetchall()]
+        evidences = [dict(row) for row in db.execute(
+            """
+            SELECT e.*, s.scan_type FROM evidences e
+            JOIN scans s ON s.id = e.scan_id
+            WHERE e.device_id=?
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT 300
+            """,
+            (device_id,),
+        ).fetchall()]
+        findings = [dict(row) for row in db.execute(
+            "SELECT * FROM findings WHERE device_id=? ORDER BY updated_at DESC",
+            (device_id,),
+        ).fetchall()]
+        finding_ids = [finding["id"] for finding in findings]
+        history = []
+        if finding_ids:
+            placeholders = ",".join("?" for _ in finding_ids)
+            history = [dict(row) for row in db.execute(
+                f"SELECT * FROM history WHERE finding_id IN ({placeholders}) ORDER BY created_at DESC LIMIT 80",
+                finding_ids,
+            ).fetchall()]
+    latest_controls = latest_controls_from_evidences(evidences)
+    control_matrix = build_control_matrix(latest_controls, findings)
+    latest_scan = scans[0] if scans else None
+    latest_full_scan = next((scan for scan in scans if scan["scan_type"] == "FULL_SCAN"), None)
+    latest_completed_task = next((task for task in tasks if task["status"] == "completed"), None)
+    open_findings = [finding for finding in findings if finding["status"] != "resolved"]
+    return {
+        "device": device_row,
+        "summary": {
+            "last_heartbeat": device_row.get("last_seen"),
+            "last_requested_task": tasks[0] if tasks else None,
+            "last_completed_task": latest_completed_task,
+            "last_full_scan": latest_full_scan,
+            "last_scan": latest_scan,
+            "agent_version": device_row.get("agent_version"),
+            "last_scan_duration_ms": latest_scan.get("duration_ms") if latest_scan else None,
+            "modules_success": latest_scan.get("modules_success") if latest_scan else None,
+            "modules_error": latest_scan.get("modules_error") if latest_scan else None,
+            "controls_pass": len([item for item in control_matrix if item["status"] == "PASS"]),
+            "open_findings": len(open_findings),
+        },
+        "control_matrix": control_matrix,
+        "controls": latest_controls,
+        "scans": scans,
+        "tasks": tasks,
+        "findings": findings,
+        "evidences": evidences,
+        "history": history,
     }
 
 
@@ -473,6 +581,100 @@ def dashboard(request: Request) -> dict[str, Any]:
         }
 
 
+def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str, Any]:
+    controls: dict[str, Any] = {}
+    for evidence in evidences:
+        control = str(evidence.get("control") or "")
+        if not control.startswith("status_"):
+            continue
+        key = control.replace("status_", "", 1)
+        if key not in controls:
+            controls[key] = {
+                "control": key,
+                "label": CONTROL_TABS.get(key, key),
+                "scan_id": evidence.get("scan_id"),
+                "scan_type": evidence.get("scan_type"),
+                "created_at": evidence.get("created_at"),
+                "data": json_loads(evidence.get("result_json")),
+            }
+    if "antivirus" in controls and "threats" not in controls:
+        controls["threats"] = {
+            "control": "threats",
+            "label": CONTROL_TABS["threats"],
+            "scan_id": controls["antivirus"].get("scan_id"),
+            "scan_type": controls["antivirus"].get("scan_type"),
+            "created_at": controls["antivirus"].get("created_at"),
+            "data": {
+                "active_threat_count": (controls["antivirus"].get("data") or {}).get("active_threat_count"),
+                "threats": (controls["antivirus"].get("data") or {}).get("threats", []),
+            },
+        }
+    return controls
+
+
+def build_control_matrix(controls: dict[str, Any], findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    open_controls = {
+        finding["control"]
+        for finding in findings
+        if finding.get("status") != "resolved"
+    }
+    matrix = []
+    for key, label in CONTROL_TABS.items():
+        entry = controls.get(key)
+        status = control_status(key, entry.get("data") if entry else None, open_controls)
+        matrix.append(
+            {
+                "control": key,
+                "label": label,
+                "status": status,
+                "last_seen": entry.get("created_at") if entry else None,
+                "scan_type": entry.get("scan_type") if entry else None,
+            }
+        )
+    return matrix
+
+
+def control_status(control: str, data: Any, open_controls: set[str]) -> str:
+    if data is None:
+        return "NOT_AVAILABLE"
+    if isinstance(data, dict) and data.get("status") == "not_supported":
+        return "NOT_AVAILABLE"
+    if isinstance(data, dict) and data.get("status") == "not_configured":
+        return "NOT_CONFIGURED"
+    if control == "backup" and isinstance(data, dict) and data.get("status") in {"missing", "empty"}:
+        return "FAIL"
+    if control == "threats" and isinstance(data, dict):
+        return "FAIL" if int(data.get("active_threat_count") or 0) > 0 else "PASS"
+    if control == "connected_devices" and isinstance(data, dict):
+        if int(data.get("unsigned_driver_count") or 0) > 0:
+            return "FAIL"
+        if int(data.get("usb_storage_count") or 0) > 0 or int(data.get("device_error_count") or 0) > 0:
+            return "WARNING"
+    if control in open_controls:
+        return "FAIL"
+    return "PASS"
+
+
+def json_loads(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value))
+    except json.JSONDecodeError:
+        return {"raw": str(value)}
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def device_view(row: dict[str, Any]) -> dict[str, Any]:
     row.pop("token", None)
     last_seen = row.get("last_seen")
@@ -487,6 +689,9 @@ def device_view(row: dict[str, Any]) -> dict[str, Any]:
 
 def status_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     controls = {}
+    for key in ("timestamp", "agent_version", "system_info", "scan_metadata"):
+        if key in evidence:
+            controls[key] = evidence[key]
     for key in ("firewall", "updates", "antivirus", "backup", "connected_devices"):
         if key in evidence:
             controls[key] = evidence[key]
