@@ -10,7 +10,7 @@
   <header class="topbar">
     <div>
       <h1>CyberCheck MIPYME</h1>
-      <p>Deteccion y verificacion automatica de configuraciones Windows.</p>
+      <p>Panel de seguridad para computadoras Windows.</p>
     </div>
     <div class="topbar-actions">
       <span id="currentUser" class="muted"></span>
@@ -24,32 +24,32 @@
 
     <section class="panel">
       <div class="section-title">
-        <h2>Equipos</h2>
+        <h2>Computadoras</h2>
         <form id="taskForm">
           <select id="deviceSelect"></select>
           <select id="taskType">
-            <option>FULL_SCAN</option>
-            <option>VERIFY_FIREWALL</option>
-            <option>VERIFY_PORTS</option>
-            <option>VERIFY_SERVICES</option>
-            <option>VERIFY_ADMINISTRATORS</option>
-            <option>VERIFY_UPDATES</option>
-            <option>VERIFY_ANTIVIRUS</option>
-            <option>VERIFY_DEVICES</option>
-            <option>VERIFY_BACKUP</option>
-            <option>V2_SNAPSHOT</option>
-            <option>VERIFY_SECURITY_CONTROLS</option>
-            <option>VERIFY_SOFTWARE</option>
-            <option>VERIFY_PROCESSES</option>
-            <option>VERIFY_EVENTLOG</option>
+            <option value="FULL_SCAN">Revision completa</option>
+            <option value="VERIFY_FIREWALL">Revisar firewall</option>
+            <option value="VERIFY_PORTS">Revisar puertos</option>
+            <option value="VERIFY_SERVICES">Revisar servicios remotos</option>
+            <option value="VERIFY_ADMINISTRATORS">Revisar administradores</option>
+            <option value="VERIFY_UPDATES">Revisar actualizaciones</option>
+            <option value="VERIFY_ANTIVIRUS">Revisar antivirus</option>
+            <option value="VERIFY_DEVICES">Revisar dispositivos</option>
+            <option value="VERIFY_BACKUP">Revisar respaldos</option>
+            <option value="V2_SNAPSHOT">Inventario completo</option>
+            <option value="VERIFY_SECURITY_CONTROLS">Revisar controles de seguridad</option>
+            <option value="VERIFY_SOFTWARE">Revisar programas instalados</option>
+            <option value="VERIFY_PROCESSES">Revisar procesos activos</option>
+            <option value="VERIFY_EVENTLOG">Revisar eventos de seguridad</option>
           </select>
-          <button type="submit">Solicitar verificacion</button>
+          <button type="submit">Solicitar revision</button>
         </form>
       </div>
-      <p id="emptyDevices" class="muted" hidden>No hay agentes registrados</p>
+      <p id="emptyDevices" class="empty-state" hidden>Aun no hay computadoras registradas. Instala el agente en una computadora para comenzar.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Equipo</th><th>Sistema</th><th>Agente</th><th>Ultimo contacto</th><th>Accion</th></tr></thead>
+          <thead><tr><th>Computadora</th><th>Sistema</th><th>Agente</th><th>Ultimo contacto</th><th>Accion</th></tr></thead>
           <tbody id="devices"></tbody>
         </table>
       </div>
@@ -58,15 +58,15 @@
 
     <section class="panel">
       <div class="section-title">
-        <h2>Estado verificado</h2>
-        <span class="muted">Ultima evidencia real recibida del agente</span>
+        <h2>Estado de seguridad</h2>
+        <span class="muted">Ultima evidencia real recibida desde la computadora</span>
       </div>
       <div id="securityStatus" class="status-grid"></div>
     </section>
 
     <section class="panel">
       <div class="section-title">
-        <h2>Hallazgos</h2>
+        <h2>Problemas encontrados</h2>
         <span id="openCount"></span>
       </div>
       <div id="findings" class="findings"></div>
@@ -74,17 +74,17 @@
 
     <section class="grid">
       <div class="panel">
-        <h2>Analisis recientes</h2>
+        <h2>Revisiones recientes</h2>
         <div id="scans" class="timeline"></div>
       </div>
       <div class="panel">
-        <h2>Historial de verificacion</h2>
+        <h2>Historial de revision</h2>
         <div id="history" class="timeline"></div>
       </div>
     </section>
 
     <section class="panel">
-      <h2>Tareas solicitadas</h2>
+      <h2>Solicitudes enviadas al agente</h2>
       <div id="tasks" class="timeline"></div>
     </section>
   </main>

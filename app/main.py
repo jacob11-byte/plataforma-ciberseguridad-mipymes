@@ -37,21 +37,21 @@ ALLOWED_TASKS = {
 }
 
 CONTROL_TABS = {
-    "system_info": "Sistema",
+    "system_info": "Informacion del equipo",
     "firewall": "Firewall",
     "ports": "Puertos",
-    "services": "Servicios",
+    "services": "Servicios remotos",
     "administrators": "Administradores",
-    "updates": "Windows Update",
+    "updates": "Actualizaciones",
     "antivirus": "Antivirus",
     "threats": "Amenazas",
-    "backup": "Backups",
+    "backup": "Respaldos",
     "connected_devices": "Dispositivos",
-    "system_inventory_v2": "Inventario",
-    "security_controls": "Controles",
-    "software_inventory": "Software",
-    "process_inventory": "Procesos",
-    "security_eventlog": "Event Log",
+    "system_inventory_v2": "Inventario avanzado",
+    "security_controls": "Controles de seguridad",
+    "software_inventory": "Programas instalados",
+    "process_inventory": "Procesos activos",
+    "security_eventlog": "Registro de seguridad",
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent

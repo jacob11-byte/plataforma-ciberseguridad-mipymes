@@ -1,5 +1,36 @@
 const state = { dashboard: null };
 
+const taskLabels = {
+  FULL_SCAN: "Revision completa",
+  VERIFY_FIREWALL: "Revisar firewall",
+  VERIFY_PORTS: "Revisar puertos",
+  VERIFY_SERVICES: "Revisar servicios remotos",
+  VERIFY_ADMINISTRATORS: "Revisar administradores",
+  VERIFY_UPDATES: "Revisar actualizaciones",
+  VERIFY_ANTIVIRUS: "Revisar antivirus",
+  VERIFY_DEVICES: "Revisar dispositivos",
+  VERIFY_BACKUP: "Revisar respaldos",
+  V2_SNAPSHOT: "Inventario completo",
+  VERIFY_SECURITY_CONTROLS: "Revisar controles de seguridad",
+  VERIFY_SOFTWARE: "Revisar programas instalados",
+  VERIFY_PROCESSES: "Revisar procesos activos",
+  VERIFY_EVENTLOG: "Revisar eventos de seguridad",
+};
+
+const statusLabels = {
+  open: "Abierto",
+  reopened: "Reabierto",
+  resolved: "Corregido",
+  pending: "Pendiente",
+  delivered: "Enviado al agente",
+  completed: "Completado",
+  failed: "Fallo",
+  canceled: "Cancelado",
+  online: "En linea",
+  offline: "Sin conexion",
+  disconnected: "Desconectado",
+};
+
 async function ensureSession() {
   const response = await fetch("/api/me");
   if (response.status === 401) {
@@ -28,25 +59,25 @@ function render() {
   const latestStatus = latestStatusEvidence(evidences || []);
   const metrics = summary || {};
   document.getElementById("metrics").innerHTML = [
-    ["Equipos", metrics.devices ?? devices.length],
+    ["Computadoras", metrics.devices ?? devices.length],
     ["En linea", metrics.online_devices ?? 0],
-    ["Hallazgos abiertos", metrics.open_findings ?? openFindings.length],
+    ["Problemas abiertos", metrics.open_findings ?? openFindings.length],
     ["Criticos", metrics.critical ?? 0],
     ["Altos", metrics.high ?? 0],
     ["Medios", metrics.medium ?? 0],
     ["Corregidos", metrics.resolved ?? 0],
-    ["Analisis", scans.length],
+    ["Revisiones", scans.length],
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
 
   document.getElementById("deviceSelect").innerHTML = devices
-    .map((d) => `<option value="${d.device_id}">${d.device_id}</option>`).join("");
+    .map((d) => `<option value="${d.device_id}">${escapeHtml(d.name || d.hostname || d.device_id)}</option>`).join("");
   document.getElementById("taskForm").hidden = devices.length === 0;
   document.getElementById("emptyDevices").hidden = devices.length !== 0;
   document.getElementById("devices").innerHTML = devices.map((d) => `
     <tr>
       <td><a class="device-link" href="/devices/${encodeURIComponent(d.device_id)}"><strong>${d.name || d.hostname || d.device_id}</strong></a><div class="muted">${d.device_id}</div></td>
       <td>${d.windows_edition || d.os_version || "Sin dato"}<div class="muted">${d.architecture || ""}</div></td>
-      <td><span class="status ${d.agent_status}">${d.agent_status_label || "Sin conexion"}</span><div class="muted">${d.agent_version || "sin version"}</div></td>
+      <td><span class="status ${d.agent_status}">${statusLabel(d.agent_status, d.agent_status_label || "Sin conexion")}</span><div class="muted">${d.agent_version || "sin version"}</div></td>
       <td>${d.last_seen || "Sin contacto"}</td>
       <td>
         <div class="row-actions">
@@ -73,7 +104,7 @@ function render() {
     <article class="finding">
       <div class="finding-head">
         <strong>${f.title}</strong>
-        <span class="badge ${f.status}">${f.status}</span>
+        <span class="badge ${f.status}">${statusLabel(f.status)}</span>
       </div>
       <div><span class="badge ${f.severity}">${f.severity}</span> <span class="muted">${f.control}</span></div>
       ${renderFindingExplanation(f, latestEvidence[`${f.device_id}:${f.control}`])}
@@ -81,23 +112,23 @@ function render() {
       <p class="muted">Cierre: ${f.closure_criteria}</p>
       ${renderEvidence(latestEvidence[`${f.device_id}:${f.control}`])}
     </article>
-  `).join("") : `<p class="muted">Aun no hay hallazgos. Ejecuta el agente para enviar evidencia.</p>`;
+  `).join("") : `<p class="empty-state">Aun no hay problemas encontrados. Ejecuta una revision para enviar evidencia real.</p>`;
 
   document.getElementById("scans").innerHTML = scans.map((s) => `
-    <div class="event"><strong>${s.scan_type}</strong> en ${s.device_id}<div class="muted">${s.created_at}</div></div>
-  `).join("") || `<p class="muted">Sin analisis registrados.</p>`;
+    <div class="event"><strong>${taskLabel(s.scan_type)}</strong> en ${s.device_id}<div class="muted">${s.created_at}</div></div>
+  `).join("") || `<p class="empty-state">Sin revisiones registradas.</p>`;
 
   document.getElementById("history").innerHTML = history.map((h) => `
-    <div class="event"><strong>${h.previous_status || "nuevo"} -> ${h.new_status}</strong><div>${h.note}</div><div class="muted">${h.created_at}</div></div>
-  `).join("") || `<p class="muted">Sin cambios de estado.</p>`;
+    <div class="event"><strong>${statusLabel(h.previous_status || "nuevo")} -> ${statusLabel(h.new_status)}</strong><div>${h.note}</div><div class="muted">${h.created_at}</div></div>
+  `).join("") || `<p class="empty-state">Sin cambios de estado.</p>`;
 
   document.getElementById("tasks").innerHTML = tasks.map((t) => `
     <div class="event">
-      <strong>${t.task_type}</strong> en ${t.device_id}
-      <div><span class="badge ${t.status}">${t.status}</span></div>
+      <strong>${taskLabel(t.task_type)}</strong> en ${t.device_id}
+      <div><span class="badge ${t.status}">${statusLabel(t.status)}</span></div>
       <div class="muted">${t.created_at}</div>
     </div>
-  `).join("") || `<p class="muted">Sin tareas solicitadas.</p>`;
+  `).join("") || `<p class="empty-state">Sin solicitudes enviadas.</p>`;
 }
 
 function latestEvidenceByDeviceAndControl(evidences) {
@@ -137,7 +168,7 @@ function renderSecurityStatus(status) {
     backupStatus(status.backup),
   ].filter(Boolean);
   if (!cards.length) {
-    return `<p class="muted">Aun no hay evidencia de estado. Solicita FULL_SCAN o VERIFY_ANTIVIRUS y deja correr el agente.</p>`;
+    return `<p class="empty-state">Aun no hay evidencia de estado. Solicita una revision completa o una revision de antivirus y deja correr el agente.</p>`;
   }
   return cards.map((card) => `
     <article class="status-card ${card.level}">
@@ -159,12 +190,12 @@ function antivirusStatus(data) {
   return {
     title: "Antivirus",
     label: level === "ok" ? "Protegido" : "Revisar",
-    detail: `${data.name || "Antivirus"}: activo=${data.enabled}, tiempo real=${data.real_time}, amenazas activas=${threats}.`,
+    detail: `${data.name || "Antivirus"}: activo=${yesNo(data.enabled)}, tiempo real=${yesNo(data.real_time)}, amenazas activas=${threats}.`,
     level,
     items: [
       `Firmas: ${data.signature_age_days ?? "sin dato"} dias`,
       `Ultimo escaneo rapido: ${data.quick_scan_age_days ?? "sin dato"} dias`,
-      `Proteccion contra manipulacion: ${data.tamper_protected ?? "sin dato"}`,
+      `Proteccion contra manipulacion: ${yesNo(data.tamper_protected)}`,
     ],
   };
 }
@@ -175,7 +206,7 @@ function firewallStatus(data) {
   return {
     title: "Firewall",
     label: ok ? "Activo" : "Revisar",
-    detail: `Dominio=${data.domain}, Privado=${data.private}, Publico=${data.public}.`,
+    detail: `Dominio=${yesNo(data.domain)}, Privado=${yesNo(data.private)}, Publico=${yesNo(data.public)}.`,
     level: ok ? "ok" : "high",
     items: [],
   };
@@ -187,7 +218,7 @@ function updateStatus(data) {
   return {
     title: "Windows Update",
     label: pending || data.reboot_pending ? "Pendiente" : "Al dia",
-    detail: `${pending} actualizaciones pendientes. Reinicio pendiente=${data.reboot_pending}.`,
+    detail: `${pending} actualizaciones pendientes. Reinicio pendiente=${yesNo(data.reboot_pending)}.`,
     level: pending || data.reboot_pending ? "medium" : "ok",
     items: [],
   };
@@ -298,13 +329,13 @@ function findingNarrative(finding, data) {
     }
     return {
       found: `El ultimo respaldo tiene ${data.days_since_last_backup ?? "edad desconocida"} dias.`,
-      action: "Ejecuta un respaldo nuevo y vuelve a solicitar VERIFY_BACKUP.",
+      action: "Ejecuta un respaldo nuevo y vuelve a solicitar una revision de respaldos.",
     };
   }
   if (rule === "FIREWALL_PUBLIC_DISABLED") {
     return {
       found: `El perfil Public del firewall esta ${data.public ? "activo" : "desactivado"}.`,
-      action: "Abre Seguridad de Windows > Firewall y proteccion de red, activa el perfil Publico y solicita VERIFY_FIREWALL.",
+      action: "Abre Seguridad de Windows > Firewall y proteccion de red, activa el perfil Publico y solicita una revision de firewall.",
     };
   }
   if (rule === "RDP_EXPOSED") {
@@ -335,7 +366,7 @@ function findingNarrative(finding, data) {
   if (rule === "ANTIVIRUS_SCAN_OLD") {
     return {
       found: `Ultimo escaneo rapido hace ${data.quick_scan_age_days ?? "tiempo desconocido"} dias.`,
-      action: "Ejecuta un analisis rapido o completo y solicita VERIFY_ANTIVIRUS.",
+      action: "Ejecuta un analisis rapido o completo y solicita una revision de antivirus.",
     };
   }
   if (rule === "ANTIVIRUS_ACTIVE_THREATS") {
@@ -359,6 +390,25 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function taskLabel(value) {
+  return taskLabels[value] || value || "Sin dato";
+}
+
+function statusLabel(value, fallback = null) {
+  if (fallback && !["online", "offline", "disconnected"].includes(value)) {
+    return fallback;
+  }
+  if (value === "nuevo") return "Nuevo";
+  return statusLabels[value] || fallback || value || "Sin dato";
+}
+
+function yesNo(value) {
+  if (value === true) return "Si";
+  if (value === false) return "No";
+  if (value === null || value === undefined || value === "") return "sin dato";
+  return String(value);
+}
+
 document.getElementById("refreshBtn").addEventListener("click", loadDashboard);
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
@@ -376,7 +426,7 @@ document.getElementById("taskForm").addEventListener("submit", async (event) => 
     }),
   });
   await loadDashboard();
-  alert("Tarea creada. El agente la ejecutara automaticamente cuando haga su proxima conexion.");
+  alert("Revision solicitada. El agente la ejecutara automaticamente cuando haga su proxima conexion.");
 });
 
 async function reconnectDevice(deviceId) {
@@ -399,7 +449,7 @@ async function reconnectDevice(deviceId) {
 }
 
 async function disconnectDevice(deviceId) {
-  const confirmed = window.confirm("Desconectar este agente? El token quedara desactivado y se cancelaran tareas pendientes.");
+  const confirmed = window.confirm("Desconectar este agente? El token quedara desactivado y se cancelaran solicitudes pendientes.");
   if (!confirmed) return;
   const notice = document.getElementById("reconnectNotice");
   notice.hidden = false;
