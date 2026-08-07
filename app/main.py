@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .rules import evaluate_rules
-from .storage import connect, generate_token, init_db, json_dumps, row_to_dict
+from .storage import connect, generate_token, init_db, insert_returning_id, json_dumps
 
 ALLOWED_TASKS = {
     "FULL_SCAN",
@@ -72,9 +72,9 @@ def index() -> FileResponse:
 def register(payload: RegisterRequest) -> dict[str, Any]:
     with connect() as db:
         company = db.execute("SELECT id FROM companies WHERE name = ?", (payload.company_name,)).fetchone()
-        company_id = company["id"] if company else db.execute(
-            "INSERT INTO companies(name) VALUES (?)", (payload.company_name,)
-        ).lastrowid
+        company_id = company["id"] if company else insert_returning_id(
+            db, "INSERT INTO companies(name) VALUES (?)", (payload.company_name,)
+        )
         existing = db.execute("SELECT token FROM devices WHERE device_id = ?", (payload.device_id,)).fetchone()
         token = existing["token"] if existing else generate_token()
         db.execute(
@@ -111,10 +111,11 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
     rule_results = evaluate_rules(payload.evidence)
     with connect() as db:
         db.execute("UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE device_id = ?", (payload.device_id,))
-        scan_id = db.execute(
+        scan_id = insert_returning_id(
+            db,
             "INSERT INTO scans(device_id, scan_type, status) VALUES (?, ?, 'completed')",
             (payload.device_id, payload.scan_type),
-        ).lastrowid
+        )
         for result in rule_results:
             db.execute(
                 "INSERT INTO evidences(scan_id, device_id, control, result_json) VALUES (?, ?, ?, ?)",
@@ -142,7 +143,8 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                             (existing["id"], previous, new_status, "Condicion insegura detectada nuevamente.", scan_id),
                         )
                 else:
-                    finding_id = db.execute(
+                    finding_id = insert_returning_id(
+                        db,
                         """
                         INSERT INTO findings(device_id, rule_id, control, title, severity, status, recommendation,
                             closure_criteria, first_scan_id, last_scan_id)
@@ -159,7 +161,7 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                             scan_id,
                             scan_id,
                         ),
-                    ).lastrowid
+                    )
                     db.execute(
                         "INSERT INTO history(finding_id, previous_status, new_status, note, scan_id) VALUES (?, NULL, 'open', ?, ?)",
                         (finding_id, "Hallazgo generado por el motor de reglas.", scan_id),
@@ -203,10 +205,11 @@ def create_task(payload: TaskRequest) -> dict[str, Any]:
         device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (payload.device_id,)).fetchone()
         if not device:
             raise HTTPException(status_code=404, detail="Equipo no existe")
-        task_id = db.execute(
+        task_id = insert_returning_id(
+            db,
             "INSERT INTO tasks(device_id, task_type, parameters_json) VALUES (?, ?, ?)",
             (payload.device_id, payload.task_type, json_dumps(payload.parameters)),
-        ).lastrowid
+        )
         return {"task_id": task_id, "status": "pending"}
 
 

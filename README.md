@@ -30,6 +30,21 @@ Abre el panel en:
 http://127.0.0.1:8000
 ```
 
+## Despliegue en Render
+
+1. Crea una base PostgreSQL en Render.
+2. Crea un Web Service conectado al repositorio de GitHub.
+3. Usa estos comandos:
+
+```text
+Build command: pip install -r requirements.txt
+Start command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+4. En Environment agrega `DATABASE_URL` con la Internal Database URL de Render.
+
+Si `DATABASE_URL` existe, la app usa PostgreSQL. Si no existe, usa SQLite local en `data/cybercheck.db`.
+
 Al iniciar se crea un equipo demo:
 
 - `device_id`: `PC-CONTABILIDAD-001`
