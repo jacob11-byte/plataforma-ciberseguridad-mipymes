@@ -107,6 +107,30 @@ th { color: #526179; font-size: 12px; text-transform: uppercase; }
   gap: 8px;
 }
 
+.evidence {
+  border-top: 1px solid #edf1f6;
+  padding-top: 8px;
+}
+
+.evidence summary {
+  cursor: pointer;
+  color: #176b87;
+  font-weight: 650;
+  font-size: 13px;
+}
+
+.evidence pre {
+  max-height: 220px;
+  overflow: auto;
+  background: #f5f7fb;
+  border: 1px solid #dde3ee;
+  border-radius: 6px;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}
+
 .finding-head { display: flex; justify-content: space-between; gap: 8px; }
 .badge { border-radius: 999px; padding: 4px 8px; font-size: 12px; font-weight: 700; }
 .open, .reopened { background: #ffe8d6; color: #8a3d00; }

@@ -35,6 +35,15 @@ def _admin_name(value: Any) -> str:
     return text.strip().lower()
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
     results: list[RuleResult] = []
     if "firewall" in evidence:
@@ -144,6 +153,56 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
                 evidence={"enabled": antivirus.get("enabled"), "real_time": antivirus.get("real_time")},
                 recommendation="Activar la proteccion antivirus y la proteccion en tiempo real.",
                 closure_criteria="El antivirus y la proteccion en tiempo real aparecen activos.",
+            )
+        )
+        signature_age = _int_or_none(antivirus.get("signature_age_days"))
+        results.append(
+            RuleResult(
+                rule_id="ANTIVIRUS_SIGNATURES_OLD",
+                control="antivirus",
+                title="Firmas del antivirus desactualizadas",
+                severity="Alto",
+                triggered=signature_age is not None and signature_age > 7,
+                evidence={
+                    "signature_age_days": signature_age,
+                    "signature_last_updated": antivirus.get("signature_last_updated"),
+                },
+                recommendation="Actualizar las firmas del antivirus desde Seguridad de Windows o Windows Update.",
+                closure_criteria="La edad de firmas aparece en siete dias o menos.",
+            )
+        )
+        quick_scan_age = _int_or_none(antivirus.get("quick_scan_age_days"))
+        results.append(
+            RuleResult(
+                rule_id="ANTIVIRUS_SCAN_OLD",
+                control="antivirus",
+                title="Antivirus sin escaneo reciente",
+                severity="Medio",
+                triggered=quick_scan_age is not None and quick_scan_age > 7,
+                evidence={
+                    "quick_scan_age_days": quick_scan_age,
+                    "quick_scan_end_time": antivirus.get("quick_scan_end_time"),
+                    "full_scan_age_days": antivirus.get("full_scan_age_days"),
+                    "full_scan_end_time": antivirus.get("full_scan_end_time"),
+                },
+                recommendation="Ejecutar un analisis rapido o completo desde Seguridad de Windows y verificar nuevamente.",
+                closure_criteria="Existe un escaneo reciente registrado por el antivirus.",
+            )
+        )
+        active_threat_count = _int_or_none(antivirus.get("active_threat_count")) or 0
+        results.append(
+            RuleResult(
+                rule_id="ANTIVIRUS_ACTIVE_THREATS",
+                control="antivirus",
+                title="Amenazas activas reportadas por el antivirus",
+                severity="Critico",
+                triggered=active_threat_count > 0,
+                evidence={
+                    "active_threat_count": active_threat_count,
+                    "threats": antivirus.get("threats", []),
+                },
+                recommendation="Abrir Seguridad de Windows, revisar Proteccion contra virus y amenazas, aplicar las acciones recomendadas y ejecutar un nuevo escaneo.",
+                closure_criteria="El antivirus reporta cero amenazas activas en una nueva evidencia.",
             )
         )
 

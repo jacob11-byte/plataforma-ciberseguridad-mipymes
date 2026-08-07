@@ -179,10 +179,38 @@ def collect_updates() -> dict[str, Any]:
 def collect_antivirus() -> dict[str, Any]:
     if os.name != "nt":
         return {"enabled": True, "real_time": True, "name": "Simulado"}
+    defender = run_powershell(
+        "Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object "
+        "AMServiceEnabled,AntivirusEnabled,RealTimeProtectionEnabled,AntispywareEnabled,"
+        "NISEnabled,AntivirusSignatureLastUpdated,AntispywareSignatureLastUpdated,"
+        "QuickScanStartTime,QuickScanEndTime,FullScanStartTime,FullScanEndTime,"
+        "FullScanAge,QuickScanAge,AntivirusSignatureAge,ComputerState | ConvertTo-Json -Compress"
+    )
+    threats = run_powershell(
+        "Get-MpThreat -ErrorAction SilentlyContinue | Select-Object ThreatName,SeverityID,CategoryID,DidThreatExecute,IsActive,Resources | ConvertTo-Json -Compress"
+    )
     data = run_powershell(
         "Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct | "
         "Select-Object -First 1 displayName,productState | ConvertTo-Json -Compress"
     )
+    if isinstance(defender, dict) and not defender.get("error"):
+        threat_rows = threats if isinstance(threats, list) else ([threats] if isinstance(threats, dict) and not threats.get("error") else [])
+        return {
+            "enabled": bool(defender.get("AntivirusEnabled")),
+            "real_time": bool(defender.get("RealTimeProtectionEnabled")),
+            "name": "Microsoft Defender",
+            "antispyware_enabled": defender.get("AntispywareEnabled"),
+            "network_inspection_enabled": defender.get("NISEnabled"),
+            "signature_age_days": defender.get("AntivirusSignatureAge"),
+            "signature_last_updated": defender.get("AntivirusSignatureLastUpdated"),
+            "quick_scan_age_days": defender.get("QuickScanAge"),
+            "quick_scan_end_time": defender.get("QuickScanEndTime"),
+            "full_scan_age_days": defender.get("FullScanAge"),
+            "full_scan_end_time": defender.get("FullScanEndTime"),
+            "computer_state": defender.get("ComputerState"),
+            "threats": threat_rows,
+            "active_threat_count": sum(1 for threat in threat_rows if isinstance(threat, dict) and threat.get("IsActive")),
+        }
     if not isinstance(data, dict):
         return {"enabled": False, "real_time": False, "error": data}
     state = int(data.get("productState") or 0)

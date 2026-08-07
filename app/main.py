@@ -346,9 +346,11 @@ def complete_task(task_id: int, request: Request, authorization: str | None = He
 def dashboard(request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
+        evidences = [dict(row) for row in db.execute("SELECT * FROM evidences ORDER BY created_at DESC LIMIT 120")]
         return {
             "devices": [dict(row) for row in db.execute("SELECT * FROM devices ORDER BY last_seen DESC NULLS LAST")],
             "findings": [dict(row) for row in db.execute("SELECT * FROM findings ORDER BY updated_at DESC")],
+            "evidences": evidences,
             "scans": [dict(row) for row in db.execute("SELECT * FROM scans ORDER BY created_at DESC LIMIT 20")],
             "tasks": [dict(row) for row in db.execute("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 20")],
             "history": [dict(row) for row in db.execute("SELECT * FROM history ORDER BY created_at DESC LIMIT 40")],

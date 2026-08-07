@@ -22,8 +22,9 @@ async function loadDashboard() {
 }
 
 function render() {
-  const { devices, findings, scans, tasks, history } = state.dashboard;
+  const { devices, findings, evidences, scans, tasks, history } = state.dashboard;
   const openFindings = findings.filter((f) => f.status !== "resolved");
+  const latestEvidence = latestEvidenceByDeviceAndControl(evidences || []);
   document.getElementById("metrics").innerHTML = [
     ["Equipos", devices.length],
     ["Hallazgos abiertos", openFindings.length],
@@ -52,6 +53,7 @@ function render() {
       <div><span class="badge ${f.severity}">${f.severity}</span> <span class="muted">${f.control}</span></div>
       <p>${f.recommendation}</p>
       <p class="muted">Cierre: ${f.closure_criteria}</p>
+      ${renderEvidence(latestEvidence[`${f.device_id}:${f.control}`])}
     </article>
   `).join("") : `<p class="muted">Aun no hay hallazgos. Ejecuta el agente para enviar evidencia.</p>`;
 
@@ -62,6 +64,43 @@ function render() {
   document.getElementById("history").innerHTML = history.map((h) => `
     <div class="event"><strong>${h.previous_status || "nuevo"} -> ${h.new_status}</strong><div>${h.note}</div><div class="muted">${h.created_at}</div></div>
   `).join("") || `<p class="muted">Sin cambios de estado.</p>`;
+}
+
+function latestEvidenceByDeviceAndControl(evidences) {
+  return evidences.reduce((index, item) => {
+    const key = `${item.device_id}:${item.control}`;
+    if (!index[key]) {
+      index[key] = item;
+    }
+    return index;
+  }, {});
+}
+
+function renderEvidence(evidence) {
+  if (!evidence) {
+    return "";
+  }
+  let parsed = {};
+  try {
+    parsed = JSON.parse(evidence.result_json);
+  } catch (_error) {
+    parsed = { raw: evidence.result_json };
+  }
+  return `
+    <details class="evidence">
+      <summary>Evidencia tecnica</summary>
+      <pre>${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>
+    </details>
+  `;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 document.getElementById("refreshBtn").addEventListener("click", loadDashboard);
