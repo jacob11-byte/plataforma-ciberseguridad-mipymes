@@ -39,6 +39,16 @@ function renderFindingExplanation(finding, evidence) {
 
 function findingNarrative(finding, data) {
   const rule = finding.rule_id;
+  if (rule.startsWith("WAZUH:")) {
+    const identity = data.vulnerability_id || "Identificador no disponible";
+    const product = data.package_name || "producto no identificado";
+    const version = data.package_version ? ` ${data.package_version}` : "";
+    const score = data.cvss_score == null ? "sin puntuacion CVSS" : `CVSS ${data.cvss_score}`;
+    return {
+      found: `Wazuh reporto ${identity} en ${product}${version} (${score}). Fuente: ${data.source || "Wazuh"}.`,
+      action: finding.recommendation,
+    };
+  }
   if (rule === "UNAUTHORIZED_LOCAL_ADMIN") {
     return {
       found: `El grupo Administradores contiene: ${(data.unauthorized_accounts || []).join(", ") || "cuentas no autorizadas"}.`,

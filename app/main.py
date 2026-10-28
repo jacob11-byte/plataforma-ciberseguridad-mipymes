@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import copy
 import hashlib
 import hmac
@@ -11,6 +12,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -18,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from .ai_service import answer_company_question, answer_device_question, company_ai_summary, device_ai_summary
 from .rules import evaluate_rules
-from .storage import connect, generate_device_id, generate_token, init_db, insert_returning_id, json_dumps
+from .storage import connect, generate_device_id, generate_token, hash_agent_token, init_db, insert_returning_id, json_dumps
 
 ALLOWED_TASKS = {
     "FULL_SCAN",
@@ -53,6 +55,7 @@ CONTROL_TABS = {
     "software_inventory": "Programas instalados",
     "process_inventory": "Procesos activos",
     "security_eventlog": "Registro de seguridad",
+    "vulnerabilities": "Vulnerabilidades CVE",
 }
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -60,14 +63,17 @@ WEB_DIR = BASE_DIR / "web"
 SESSION_COOKIE = "cybercheck_session"
 SESSION_MAX_AGE = 60 * 60 * 8
 AGENT_ONLINE_WINDOW_SECONDS = 10 * 60
+REGISTRATION_WINDOW_SECONDS = 15 * 60
+REGISTRATION_ATTEMPT_LIMIT = 20
+_DEV_SESSION_SECRET = secrets.token_urlsafe(48)
 
 app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
 
 
 class RegisterRequest(BaseModel):
-    registration_code: str = Field(min_length=4)
-    company_name: str = Field(default="MIPYME Principal", min_length=2)
-    hostname: str = Field(min_length=1)
+    registration_code: str = Field(min_length=4, max_length=256)
+    company_name: str = Field(default="MIPYME Principal", min_length=2, max_length=120)
+    hostname: str = Field(min_length=1, max_length=255)
     os_version: str | None = None
     windows_edition: str | None = None
     architecture: str | None = None
@@ -104,7 +110,46 @@ class AiChatRequest(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    validate_security_config()
     init_db()
+
+
+def _production_mode() -> bool:
+    return os.getenv("CYBERCHECK_ENV", "").strip().lower() in {"prod", "production"} or bool(
+        os.getenv("RENDER_SERVICE_ID") or os.getenv("RENDER")
+    )
+
+
+def validate_security_config() -> None:
+    """Fail closed before serving requests with an unsafe production configuration."""
+    if not _production_mode():
+        return
+    required = {
+        "ADMIN_PASSWORD": 12,
+        "SESSION_SECRET": 32,
+        "AGENT_REGISTRATION_CODE": 24,
+    }
+    for name, minimum in required.items():
+        value = os.getenv(name, "")
+        if len(value) < minimum:
+            raise RuntimeError(f"{name} debe tener al menos {minimum} caracteres en produccion")
+    if os.environ["ADMIN_PASSWORD"] in {"admin123", "password", "changeme"}:
+        raise RuntimeError("ADMIN_PASSWORD no puede usar una contrasena de ejemplo")
+    if os.environ["SESSION_SECRET"] in {os.environ["ADMIN_PASSWORD"], os.environ["AGENT_REGISTRATION_CODE"]}:
+        raise RuntimeError("SESSION_SECRET debe ser independiente de las otras credenciales")
+    if not os.getenv("DATABASE_URL"):
+        raise RuntimeError("DATABASE_URL (PostgreSQL) es obligatorio en produccion")
+    if os.getenv("COOKIE_SECURE", "true").lower() == "false":
+        raise RuntimeError("COOKIE_SECURE no puede deshabilitarse en produccion")
+
+
+def _setting(name: str, development_default: str) -> str:
+    value = os.getenv(name)
+    if value:
+        return value
+    if _production_mode():
+        raise RuntimeError(f"{name} es obligatorio en produccion")
+    return development_default
 
 
 def _admin_username() -> str:
@@ -112,14 +157,11 @@ def _admin_username() -> str:
 
 
 def _admin_password() -> str:
-    return os.getenv("ADMIN_PASSWORD", "admin123")
+    return _setting("ADMIN_PASSWORD", "admin123")
 
 
 def _session_secret() -> str:
-    configured = os.getenv("SESSION_SECRET")
-    if configured:
-        return configured
-    return _admin_password()
+    return _setting("SESSION_SECRET", _DEV_SESSION_SECRET)
 
 
 def _sign(value: str) -> str:
@@ -146,28 +188,72 @@ def _read_session(request: Request) -> str | None:
     try:
         payload = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
         username, expires, _nonce = payload.split("|", 2)
-    except ValueError:
+        expiry = int(expires)
+    except (ValueError, UnicodeDecodeError, binascii.Error, OverflowError):
         return None
-    if int(expires) < int(time.time()):
+    if expiry < int(time.time()) or username != _admin_username():
         return None
     return username
+
+
+def _require_same_origin(request: Request) -> None:
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        raise HTTPException(status_code=403, detail="Origen no autorizado")
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if not origin:
+        if _production_mode():
+            raise HTTPException(status_code=403, detail="Encabezado Origin o Referer requerido")
+        return
+    parsed = urlsplit(origin)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != request.headers.get("host", "").lower():
+        raise HTTPException(status_code=403, detail="Origen no autorizado")
 
 
 def _require_user(request: Request) -> str:
     username = _read_session(request)
     if not username:
         raise HTTPException(status_code=401, detail="Sesion requerida")
+    _require_same_origin(request)
     return username
 
 
 def _registration_code() -> str:
-    return os.getenv("AGENT_REGISTRATION_CODE", "cybercheck-register-dev")
+    return _setting("AGENT_REGISTRATION_CODE", "cybercheck-register-dev")
+
+
+def _check_registration_limit(request: Request) -> None:
+    client_host = request.client.host if request.client else "unknown"
+    client_hash = hashlib.sha256(client_host.encode("utf-8")).hexdigest()
+    now = int(time.time())
+    expired_before = now - REGISTRATION_WINDOW_SECONDS
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO registration_rate_limits(client_hash, window_started, attempts)
+            VALUES (?, ?, 1)
+            ON CONFLICT(client_hash) DO UPDATE SET
+                window_started = CASE WHEN registration_rate_limits.window_started < ?
+                    THEN excluded.window_started ELSE registration_rate_limits.window_started END,
+                attempts = CASE WHEN registration_rate_limits.window_started < ?
+                    THEN 1 ELSE registration_rate_limits.attempts + 1 END
+            """,
+            (client_hash, now, expired_before, expired_before),
+        )
+        row = db.execute("SELECT attempts, window_started FROM registration_rate_limits WHERE client_hash = ?", (client_hash,)).fetchone()
+    if row["attempts"] > REGISTRATION_ATTEMPT_LIMIT:
+        retry_after = max(1, REGISTRATION_WINDOW_SECONDS - (now - int(row["window_started"])))
+        raise HTTPException(status_code=429, detail="Demasiados intentos de registro", headers={"Retry-After": str(retry_after)})
 
 
 def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
     if not token:
         raise HTTPException(status_code=401, detail="Token requerido")
-    token = token.removeprefix("Bearer ").strip()
+    scheme, separator, credential = token.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not credential.strip():
+        raise HTTPException(status_code=401, detail="Token Bearer requerido")
+    token_hash = hash_agent_token(credential.strip())
     with connect() as db:
         row = db.execute(
             """
@@ -175,10 +261,10 @@ def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
             JOIN agent_credentials c ON c.device_id = d.device_id
             WHERE d.device_id = ? AND c.token = ? AND c.active = ?
             """,
-            (device_id, token, True),
+            (device_id, token_hash, True),
         ).fetchone()
         if row:
-            db.execute("UPDATE agent_credentials SET last_used_at=CURRENT_TIMESTAMP WHERE device_id=? AND token=?", (device_id, token))
+            db.execute("UPDATE agent_credentials SET last_used_at=CURRENT_TIMESTAMP WHERE device_id=? AND token=?", (device_id, token_hash))
             return dict(row)
         raise HTTPException(status_code=403, detail="Token invalido para el equipo")
 
@@ -231,6 +317,8 @@ def device_script() -> FileResponse:
 
 @app.post("/api/login")
 def login(payload: LoginRequest) -> JSONResponse:
+    if _production_mode():
+        validate_security_config()
     valid_user = hmac.compare_digest(payload.username, _admin_username())
     valid_password = hmac.compare_digest(payload.password, _admin_password())
     if not valid_user or not valid_password:
@@ -241,14 +329,15 @@ def login(payload: LoginRequest) -> JSONResponse:
         _create_session(payload.username),
         max_age=SESSION_MAX_AGE,
         httponly=True,
-        secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
-        samesite="lax",
+        secure=_production_mode() or os.getenv("COOKIE_SECURE", "true").lower() != "false",
+        samesite="strict",
     )
     return response
 
 
 @app.post("/api/logout")
-def logout() -> Response:
+def logout(request: Request) -> Response:
+    _require_user(request)
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE)
     return response
@@ -260,7 +349,10 @@ def me(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/register")
-def register(payload: RegisterRequest) -> dict[str, Any]:
+def register(payload: RegisterRequest, request: Request) -> dict[str, Any]:
+    if _production_mode():
+        validate_security_config()
+    _check_registration_limit(request)
     if not hmac.compare_digest(payload.registration_code, _registration_code()):
         raise HTTPException(status_code=403, detail="Codigo de registro invalido")
     with connect() as db:
@@ -270,6 +362,7 @@ def register(payload: RegisterRequest) -> dict[str, Any]:
         )
         device_id = generate_device_id()
         token = generate_token()
+        stored_token = hash_agent_token(token)
         db.execute(
             """
             INSERT INTO devices(device_id, company_id, name, hostname, os_version, windows_edition,
@@ -286,12 +379,12 @@ def register(payload: RegisterRequest) -> dict[str, Any]:
                 payload.architecture,
                 payload.ip_address,
                 payload.agent_version,
-                token,
+                stored_token,
             ),
         )
         db.execute(
             "INSERT INTO agent_credentials(device_id, token) VALUES (?, ?)",
-            (device_id, token),
+            (device_id, stored_token),
         )
         return {"device_id": device_id, "token": token, "hostname": payload.hostname}
 
@@ -716,6 +809,7 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
                 "data": json_loads(evidence.get("result_json")),
             }
     if "antivirus" in controls and "threats" not in controls:
+        antivirus_data = controls["antivirus"].get("data") or {}
         controls["threats"] = {
             "control": "threats",
             "label": CONTROL_TABS["threats"],
@@ -723,8 +817,10 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
             "scan_type": controls["antivirus"].get("scan_type"),
             "created_at": controls["antivirus"].get("created_at"),
             "data": {
-                "active_threat_count": (controls["antivirus"].get("data") or {}).get("active_threat_count"),
-                "threats": (controls["antivirus"].get("data") or {}).get("threats", []),
+                "active_threat_count": antivirus_data.get("active_threat_count"),
+                "threats": antivirus_data.get("threats", []),
+                "status": antivirus_data.get("status"),
+                "error": antivirus_data.get("error"),
             },
         }
     return controls
@@ -832,6 +928,8 @@ def build_control_matrix(controls: dict[str, Any], findings: list[dict[str, Any]
     for key, label in CONTROL_TABS.items():
         entry = controls.get(key)
         status = control_status(key, entry.get("data") if entry else None, open_controls)
+        if key == "administrators" and entry and "admin_policy" not in controls:
+            status = "NOT_CONFIGURED"
         matrix.append(
             {
                 "control": key,
@@ -847,12 +945,21 @@ def build_control_matrix(controls: dict[str, Any], findings: list[dict[str, Any]
 def control_status(control: str, data: Any, open_controls: set[str]) -> str:
     if data is None:
         return "NOT_AVAILABLE"
-    if isinstance(data, dict) and data.get("success") is False:
-        return "NOT_AVAILABLE"
-    if isinstance(data, dict) and data.get("status") == "not_supported":
-        return "NOT_AVAILABLE"
-    if isinstance(data, dict) and data.get("status") == "not_configured":
-        return "NOT_CONFIGURED"
+    if isinstance(data, dict):
+        if data.get("success") is False or data.get("error") or data.get("status") in {"error", "unavailable", "not_supported"}:
+            return "NOT_AVAILABLE"
+        if data.get("status") == "not_configured":
+            return "NOT_CONFIGURED"
+        if not data or ("success" in data and not data.get("data")):
+            return "NOT_AVAILABLE"
+        if control == "firewall" and any(not isinstance(data.get(profile), bool) for profile in ("domain", "private", "public")):
+            return "NOT_AVAILABLE"
+        if control == "updates" and (not isinstance(data.get("pending_count"), int) or not isinstance(data.get("reboot_pending"), bool)):
+            return "NOT_AVAILABLE"
+        if control == "antivirus" and any(not isinstance(data.get(key), bool) for key in ("enabled", "real_time")):
+            return "NOT_AVAILABLE"
+        if control == "threats" and data.get("active_threat_count") is None:
+            return "NOT_AVAILABLE"
     if control == "backup" and isinstance(data, dict) and data.get("status") in {"missing", "empty"}:
         return "FAIL"
     if control == "threats" and isinstance(data, dict):
@@ -929,6 +1036,8 @@ def status_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         controls["services"] = evidence["services"]
     if "local_administrators" in evidence:
         controls["administrators"] = evidence["local_administrators"]
+    if "authorized_local_admins" in evidence:
+        controls["admin_policy"] = {"authorized_local_admins": evidence["authorized_local_admins"]}
     return controls
 
 

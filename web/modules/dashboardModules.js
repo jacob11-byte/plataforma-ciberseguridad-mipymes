@@ -135,7 +135,10 @@ function renderFindingsModule(state) {
       <span>${openFindings.length} abiertos</span>
     </div>
     <div class="findings">
-      ${findings.length ? findings.map((finding) => findingCard(finding, latestEvidence[`${finding.device_id}:${finding.control}`])).join("") : `<p class="empty-state">Aun no hay problemas encontrados. Ejecuta una revision para enviar evidencia real.</p>`}
+      ${findings.length ? findings.map((finding) => {
+        const evidenceControl = finding.rule_id.startsWith("WAZUH:") ? `wazuh_cve:${finding.rule_id}` : finding.control;
+        return findingCard(finding, latestEvidence[`${finding.device_id}:${evidenceControl}`]);
+      }).join("") : `<p class="empty-state">Aun no hay problemas encontrados. Ejecuta una revision para enviar evidencia real.</p>`}
     </div>
   `;
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -171,6 +172,11 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
     details_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS registration_rate_limits (
+    client_hash TEXT PRIMARY KEY,
+    window_started BIGINT NOT NULL,
+    attempts INTEGER NOT NULL
+);
 """
 
 POSTGRES_SCHEMA = (
@@ -258,6 +264,7 @@ def init_db() -> None:
         db.executescript(POSTGRES_SCHEMA if db.is_postgres else SQLITE_SCHEMA)
         migrate_db(db)
         remove_demo_seed(db)
+        hash_existing_agent_tokens(db)
 
 
 def migrate_db(db: Database) -> None:
@@ -323,6 +330,28 @@ def remove_demo_seed(db: Database) -> None:
     db.execute("DELETE FROM findings WHERE device_id = ?", (legacy_device,))
     db.execute("DELETE FROM scans WHERE device_id = ?", (legacy_device,))
     db.execute("DELETE FROM devices WHERE device_id = ? AND token = ? AND name = ?", (legacy_device, legacy_token, legacy_name))
+
+
+def hash_agent_token(token: str) -> str:
+    """Hash high-entropy bearer tokens before persistence or lookup."""
+    return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def hash_existing_agent_tokens(db: Database) -> None:
+    """Upgrade plaintext credentials in place without changing agent config files."""
+    for row in db.execute("SELECT id, token FROM agent_credentials").fetchall():
+        token = row["token"]
+        if not token.startswith("sha256:"):
+            digest = hash_agent_token(token)
+            existing = db.execute("SELECT id FROM agent_credentials WHERE token = ?", (digest,)).fetchone()
+            if existing:
+                db.execute("DELETE FROM agent_credentials WHERE id = ?", (row["id"],))
+            else:
+                db.execute("UPDATE agent_credentials SET token = ? WHERE id = ?", (digest, row["id"]))
+    for row in db.execute("SELECT device_id, token FROM devices").fetchall():
+        token = row["token"]
+        if not token.startswith("sha256:"):
+            db.execute("UPDATE devices SET token = ? WHERE device_id = ?", (hash_agent_token(token), row["device_id"]))
 
 
 def insert_returning_id(db: Database, sql: str, params: Iterable[Any]) -> int:

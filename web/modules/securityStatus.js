@@ -36,15 +36,33 @@ export function renderSecurityStatus(status) {
   `).join("");
 }
 
+function unavailable(data) {
+  return !data || data.success === false || Boolean(data.error)
+    || ["error", "unavailable", "not_supported"].includes(data.status);
+}
+
+function unavailableCard(title, data, fallback = "La consulta no produjo evidencia suficiente.") {
+  return {
+    title,
+    label: "No evaluado",
+    detail: data?.error || fallback,
+    level: "medium",
+    items: [],
+  };
+}
+
 function antivirusStatus(data) {
   if (!data) return null;
+  if (unavailable(data) || data.enabled == null || data.real_time == null) {
+    return unavailableCard("Antivirus", data);
+  }
   const enabled = data.enabled === true && data.real_time === true;
-  const threats = Number(data.active_threat_count || 0);
+  const threats = data.active_threat_count == null ? null : Number(data.active_threat_count);
   const level = threats > 0 || !enabled ? "critical" : "ok";
   return {
     title: "Antivirus",
     label: level === "ok" ? "Protegido" : "Revisar",
-    detail: `${data.name || "Antivirus"}: activo=${yesNo(data.enabled)}, tiempo real=${yesNo(data.real_time)}, amenazas activas=${threats}.`,
+    detail: `${data.name || "Antivirus"}: activo=${yesNo(data.enabled)}, tiempo real=${yesNo(data.real_time)}, amenazas activas=${threats ?? "sin dato"}.`,
     level,
     items: [
       `Firmas: ${data.signature_age_days ?? "sin dato"} dias`,
@@ -56,6 +74,9 @@ function antivirusStatus(data) {
 
 function firewallStatus(data) {
   if (!data) return null;
+  if (unavailable(data) || ["domain", "private", "public"].some((key) => data[key] == null)) {
+    return unavailableCard("Firewall", data);
+  }
   const ok = data.domain !== false && data.private !== false && data.public !== false;
   return {
     title: "Firewall",
@@ -68,7 +89,10 @@ function firewallStatus(data) {
 
 function updateStatus(data) {
   if (!data) return null;
-  const pending = Number(data.pending_count || 0);
+  if (unavailable(data) || data.pending_count == null || data.reboot_pending == null) {
+    return unavailableCard("Windows Update", data);
+  }
+  const pending = Number(data.pending_count);
   return {
     title: "Windows Update",
     label: pending || data.reboot_pending ? "Pendiente" : "Al dia",
@@ -80,6 +104,9 @@ function updateStatus(data) {
 
 function deviceStatus(data) {
   if (!data) return null;
+  if (unavailable(data) || ["usb_storage", "unsigned_drivers", "device_errors"].some((key) => !Array.isArray(data[key]))) {
+    return unavailableCard("Dispositivos conectados", data);
+  }
   const usb = Number(data.usb_storage_count || 0);
   const unsigned = Number(data.unsigned_driver_count || 0);
   const errors = Number(data.device_error_count || 0);
@@ -94,12 +121,13 @@ function deviceStatus(data) {
 }
 
 function portStatus(data) {
+  if (data && !Array.isArray(data)) return unavailableCard("Puertos escuchando", data);
   if (!Array.isArray(data)) return null;
   const risky = data.filter((item) => [3389, 5985, 5986, 445, 139].includes(Number(item.port)));
   return {
     title: "Puertos escuchando",
-    label: risky.length ? "Expuestos" : "Sin riesgo comun",
-    detail: `${data.length} puertos locales escuchando. Riesgo comun detectado: ${risky.length}.`,
+    label: risky.length ? "Escucha de riesgo" : "Sin escucha de riesgo comun",
+    detail: `${data.length} puertos en escucha local. Puertos de riesgo comun: ${risky.length}. La exposicion desde la red requiere otra comprobacion.`,
     level: risky.length ? "high" : "ok",
     items: risky.slice(0, 5).map((item) => `${item.port} ${item.process_name || ""}`.trim()),
   };
@@ -107,7 +135,13 @@ function portStatus(data) {
 
 function backupStatus(data) {
   if (!data) return null;
-  const ok = data.exists === true && Number(data.days_since_last_backup || 999) <= 7;
+  if (data.status === "not_configured") {
+    return unavailableCard("Respaldo", data, "La ruta de respaldo no esta configurada.");
+  }
+  if (unavailable(data) || data.exists == null || (data.exists && (data.days_since_last_backup == null || data.latest_size == null))) {
+    return unavailableCard("Respaldo", data);
+  }
+  const ok = data.exists === true && Number(data.days_since_last_backup) <= 7 && Number(data.latest_size) > 0;
   return {
     title: "Respaldo",
     label: ok ? "Reciente" : "Revisar",
