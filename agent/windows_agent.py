@@ -25,13 +25,14 @@ if __package__ in {None, ""}:
 from agent.core.modules import run_module
 from agent.core.powershell import run_powershell
 from agent.outbox import Outbox
-from agent.modules.eventlog import collect_security_events
+from agent.modules.eventlog import collect_security_detections, collect_security_events
+from agent.modules.hardening import collect_hardening
 from agent.modules.process_inventory import collect_processes
 from agent.modules.security_controls import collect_security_controls
 from agent.modules.software_inventory import collect_installed_software
 from agent.modules.system_inventory import collect_system_inventory
 
-AGENT_VERSION = "0.6.0"
+AGENT_VERSION = "0.7.0"
 LOGGER = logging.getLogger("cybercheck.agent")
 HTTP_TIMEOUT_SECONDS = 60
 HTTP_MAX_ATTEMPTS = 3
@@ -51,7 +52,11 @@ ALLOWED_TASKS = {
     "VERIFY_SOFTWARE",
     "VERIFY_PROCESSES",
     "VERIFY_EVENTLOG",
+    "VERIFY_HARDENING",
 }
+# The service runs a full scan on its own on this cadence, even when nobody
+# requests one from the panel. Overridable with "auto_scan_hours" (0 = off).
+DEFAULT_AUTO_SCAN_HOURS = 12
 
 
 class AgentAlreadyRunning(RuntimeError):
@@ -457,22 +462,45 @@ def collect_updates() -> dict[str, Any]:
     reboot = run_powershell(
         "Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired' | ConvertTo-Json"
     )
+    # One search returns both the count and which updates are missing, so the
+    # panel can name the KB and its severity instead of only a number.
     pending = run_powershell(
         "$s=New-Object -ComObject Microsoft.Update.Session; "
-        "$r=$s.CreateUpdateSearcher().Search(\"IsInstalled=0 and Type='Software'\"); "
-        "$r.Updates.Count | ConvertTo-Json"
+        "$r=$s.CreateUpdateSearcher().Search(\"IsInstalled=0 and Type='Software' and IsHidden=0\"); "
+        "[pscustomobject]@{ Count = $r.Updates.Count; Items = @($r.Updates | Select-Object -First 15 | ForEach-Object { "
+        "[pscustomobject]@{ Title = [string]$_.Title; "
+        "KB = (@($_.KBArticleIDs) | ForEach-Object { 'KB' + $_ }) -join ','; "
+        "Severity = [string]$_.MsrcSeverity; "
+        "Security = [bool](@($_.Categories) | Where-Object { $_.Name -match 'Security|Seguridad' }) } }) "
+        "} | ConvertTo-Json -Compress -Depth 4",
+        timeout=240,
     )
     for value in (reboot, pending):
         error = collection_error(value)
         if error:
             return error
-    if not isinstance(reboot, bool) or isinstance(pending, bool):
+    if not isinstance(reboot, bool) or not isinstance(pending, dict):
         return {"status": "error", "error": "Windows Update devolvio datos incompletos."}
     try:
-        pending_count = int(pending)
+        pending_count = int(pending.get("Count"))
     except (TypeError, ValueError):
         return {"status": "error", "error": "No se pudo leer el numero de actualizaciones pendientes."}
-    return {"pending_count": pending_count, "reboot_pending": reboot}
+    items = pending.get("Items") or []
+    items = items if isinstance(items, list) else [items]
+    return {
+        "pending_count": pending_count,
+        "reboot_pending": reboot,
+        "pending_updates": [
+            {
+                "title": item.get("Title"),
+                "kb": item.get("KB") or None,
+                "severity": item.get("Severity") or None,
+                "security": bool(item.get("Security")),
+            }
+            for item in items
+            if isinstance(item, dict)
+        ],
+    }
 
 
 def collect_antivirus() -> dict[str, Any]:
@@ -687,6 +715,10 @@ def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
         collect_module("software_inventory", "software_inventory", lambda: run_module(collect_installed_software).to_dict())
         collect_module("process_inventory", "process_inventory", lambda: run_module(collect_processes).to_dict())
         collect_module("security_eventlog", "security_eventlog", lambda: run_module(collect_security_events).to_dict())
+    if task_type in {"FULL_SCAN", "VERIFY_HARDENING"}:
+        collect_module("hardening", "hardening", lambda: run_module(collect_hardening).to_dict())
+    if task_type in {"FULL_SCAN", "VERIFY_EVENTLOG"}:
+        collect_module("security_detections", "security_detections", collect_security_detections)
     if task_type == "VERIFY_SECURITY_CONTROLS":
         collect_module("security_controls", "security_controls", lambda: run_module(collect_security_controls).to_dict())
     if task_type == "VERIFY_SOFTWARE":
@@ -836,6 +868,72 @@ def send_scan(
     return result
 
 
+FAILED_SCAN_RETRY_SECONDS = 60 * 60
+
+
+def _state_path(config: dict[str, Any]) -> Path | None:
+    config_path = config.get("_config_path")
+    return Path(config_path).with_name("agent_state.json") if config_path else None
+
+
+def load_agent_state(config: dict[str, Any]) -> dict[str, Any]:
+    path = _state_path(config)
+    if path is None:
+        return {}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def record_full_scan(config: dict[str, Any], ok: bool, now: float | None = None) -> None:
+    path = _state_path(config)
+    if path is None:
+        return
+    state = load_agent_state(config)
+    state.update({"last_full_scan": time.time() if now is None else now, "last_full_scan_ok": ok})
+    try:
+        write_agent_config(state, path)
+    except OSError as exc:
+        log_failure("No se pudo guardar el estado del agente", exc, config)
+
+
+def scheduled_scan_due(config: dict[str, Any], now: float | None = None) -> bool:
+    """True when the device has not been fully reviewed recently.
+
+    A newly installed agent has no state, so its first cycle performs a full
+    scan immediately; failed attempts are retried after an hour.
+    """
+    if _state_path(config) is None:
+        return False
+    try:
+        hours = float(config.get("auto_scan_hours", DEFAULT_AUTO_SCAN_HOURS))
+    except (TypeError, ValueError):
+        hours = DEFAULT_AUTO_SCAN_HOURS
+    if hours <= 0:
+        return False
+    state = load_agent_state(config)
+    last = state.get("last_full_scan")
+    if not isinstance(last, (int, float)):
+        return True
+    interval = hours * 3600 if state.get("last_full_scan_ok", True) else FAILED_SCAN_RETRY_SECONDS
+    return (time.time() if now is None else now) - last >= interval
+
+
+def run_scheduled_scan(config: dict[str, Any]) -> None:
+    if not scheduled_scan_due(config):
+        return
+    LOGGER.info("Ejecutando revision completa programada")
+    try:
+        send_scan(config, "FULL_SCAN")
+    except Exception as exc:
+        record_full_scan(config, ok=False)
+        log_failure("Revision programada fallida; se reintentara en una hora", exc, config)
+        return
+    record_full_scan(config, ok=True)
+
+
 def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
     queue_status = flush_outbox(config)
     if queue_status["sent"]:
@@ -854,11 +952,12 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
     tasks = request_json("GET", url, config["token"]).get("tasks", [])[:max_tasks]
     if not tasks:
         LOGGER.info("Sin tareas pendientes")
-        return
     for task in tasks:
         try:
             LOGGER.info("Ejecutando tarea %s: %s", task["id"], task["task_type"])
             result = send_scan(config, task["task_type"], task_id=int(task["id"]))
+            if task["task_type"] == "FULL_SCAN":
+                record_full_scan(config, ok=True)
             if result.get("queued"):
                 LOGGER.info("Tarea %s queda pendiente hasta recuperar conectividad", task["id"])
                 continue
@@ -891,6 +990,7 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
                 )
             except Exception:
                 pass
+    run_scheduled_scan(config)
 
 
 def poll_loop(config: dict[str, Any], interval_seconds: int, max_tasks: int) -> None:

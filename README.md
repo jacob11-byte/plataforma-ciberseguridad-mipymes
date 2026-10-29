@@ -20,6 +20,31 @@ resultados sin conexion, aplicacion de bandeja con estado sanitizado, bloqueo
 contra procesos solapados, tareas con lease e identificador idempotente, y
 estados parciales cuando una consulta no produjo evidencia suficiente.
 
+### Diagnostico de cada problema
+
+Cada hallazgo explica, con los datos reales del equipo:
+
+- **Que se encontro**: la cuenta, IP, KB, puerto y proceso, ruta, exclusion o
+  carpeta compartida exacta (por ejemplo "14 inicios fallidos contra
+  'contabilidad' desde 185.220.101.4 por escritorio remoto, contrasena incorrecta").
+- **Por que es peligroso**: como lo aprovecharia un atacante.
+- **Como corregirlo**: pasos concretos y el comando de PowerShell para copiar.
+- **Referencias**: tecnica de MITRE ATT&CK y CIS Controls v8.
+
+Cada equipo recibe un puntaje de 0 a 100 (nota A-F) segun sus problemas
+abiertos, y el panel indica que controles no se pudieron verificar y por que.
+
+El agente revisa, ademas de firewall, antivirus, parches, puertos, servicios y
+respaldos: cuentas Invitado/Administrador y sin contrasena, politica de
+contrasenas y bloqueo, WDigest, NTLMv1, LLMNR, exclusiones de Defender,
+programas de inicio sin firma, carpetas compartidas con "Todos", procesos sin
+firma en carpetas de usuario, BitLocker, Secure Boot, fin de soporte de Windows
+y eventos de ataque de las ultimas 24 h (fuerza bruta, cuentas creadas,
+cambios en Administradores, borrado del registro, servicios sospechosos).
+
+El servicio ejecuta una revision completa al instalarse y luego cada 12 horas
+(`auto_scan_hours` en la configuracion; 0 la desactiva), sin que nadie la pida.
+
 El panel tiene usuarios con roles, auditoria de acciones y rotacion de
 credenciales de agentes:
 

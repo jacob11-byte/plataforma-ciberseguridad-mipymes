@@ -51,7 +51,7 @@ function renderDevicesModule(state) {
     <p class="empty-state" ${devices.length ? "hidden" : ""}>Aun no hay computadoras registradas.${canInstall ? " Pulsa <strong>Agregar computadora</strong>, abre el archivo descargado en el equipo y aparecera aqui automaticamente." : ""}</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Computadora</th><th>Sistema</th><th>Agente</th><th>Ultimo contacto</th><th>Accion</th></tr></thead>
+        <thead><tr><th>Computadora</th><th>Seguridad</th><th>Sistema</th><th>Agente</th><th>Ultimo contacto</th><th>Accion</th></tr></thead>
         <tbody>${devices.map((device) => deviceRow(device, state.user)).join("")}</tbody>
       </table>
     </div>
@@ -88,6 +88,7 @@ function deviceRow(device, user) {
   return `
     <tr>
       <td><a class="device-link" href="/devices/${encodeURIComponent(device.device_id)}"><strong>${escapeHtml(device.name || device.hostname || device.device_id)}</strong></a><div class="muted">${escapeHtml(device.device_id)}</div></td>
+      <td><span class="grade-pill grade-${escapeHtml(device.security_grade || "na")}">${escapeHtml(device.security_grade || "-")}</span> ${escapeHtml(device.security_score ?? "-")}/100<div class="muted">${escapeHtml(device.security_open_findings ?? 0)} problema(s) abierto(s)</div></td>
       <td>${escapeHtml(device.windows_edition || device.os_version || "Sin dato")}<div class="muted">${escapeHtml(device.architecture || "")}</div></td>
       <td><span class="status ${device.agent_status}">${statusLabel(device.agent_status, device.agent_status_label || "Sin conexion")}</span><div class="muted">${escapeHtml(device.agent_version || "sin version")}</div></td>
       <td>${escapeHtml(device.last_seen || "Sin contacto")}</td>

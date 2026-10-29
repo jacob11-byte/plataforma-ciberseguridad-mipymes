@@ -13,6 +13,7 @@ export const taskLabels = {
   VERIFY_SOFTWARE: "Revisar programas instalados",
   VERIFY_PROCESSES: "Revisar procesos activos",
   VERIFY_EVENTLOG: "Revisar eventos de seguridad",
+  VERIFY_HARDENING: "Revisar endurecimiento (cuentas, contrasenas, exclusiones)",
 };
 
 const statusLabels = {

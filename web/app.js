@@ -76,6 +76,7 @@ function renderMetrics() {
   const openFindings = findings.filter((finding) => finding.status !== "resolved");
   const metrics = summary || {};
   document.getElementById("metrics").innerHTML = [
+    ["Puntaje de seguridad", metrics.security_score == null ? "-" : `${metrics.security_score}/100`],
     ["Computadoras", metrics.devices ?? devices.length],
     ["En linea", metrics.online_devices ?? 0],
     ["Problemas abiertos", metrics.open_findings ?? openFindings.length],

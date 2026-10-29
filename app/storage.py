@@ -353,6 +353,7 @@ def migrate_db(db: Database) -> None:
         "agent_credentials": {"expires_at": timestamp_type},
         "admin_audit_log": {"source_hash": "TEXT", "company_id": "INTEGER"},
         "devices": {"credential_rotation_requested": bool_false},
+        "findings": {"details_json": "TEXT"},
     }
     for table, columns_to_add in added_columns.items():
         existing_columns = set(table_columns(db, table))

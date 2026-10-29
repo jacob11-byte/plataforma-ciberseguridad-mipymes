@@ -52,6 +52,17 @@ ALLOWED_TASKS = {
     "VERIFY_SOFTWARE",
     "VERIFY_PROCESSES",
     "VERIFY_EVENTLOG",
+    "VERIFY_HARDENING",
+}
+
+# Weight of each open finding against a 100-point device score.
+SEVERITY_WEIGHTS = {"critico": 25, "critical": 25, "alto": 10, "high": 10, "medio": 4, "medium": 4, "bajo": 1, "low": 1}
+MODULE_LABELS = {
+    "firewall": "Firewall", "ports": "Puertos", "services": "Servicios", "administrators": "Administradores",
+    "updates": "Windows Update", "antivirus": "Antivirus", "connected_devices": "Dispositivos",
+    "backup": "Respaldos", "system_inventory_v2": "Inventario", "security_controls": "Controles de seguridad",
+    "software_inventory": "Programas", "process_inventory": "Procesos", "security_eventlog": "Registro de eventos",
+    "hardening": "Endurecimiento", "security_detections": "Detecciones",
 }
 
 CONTROL_TABS = {
@@ -70,6 +81,8 @@ CONTROL_TABS = {
     "software_inventory": "Programas instalados",
     "process_inventory": "Procesos activos",
     "security_eventlog": "Registro de seguridad",
+    "hardening": "Endurecimiento",
+    "security_detections": "Detecciones de ataques",
     "vulnerabilities": "Vulnerabilidades CVE",
 }
 
@@ -1163,13 +1176,18 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                 if existing:
                     previous = existing["status"]
                     new_status = "reopened" if previous == "resolved" else "open"
+                    # The diagnosis is refreshed on every scan so it always
+                    # names what is wrong right now (accounts, KBs, IPs...).
                     db.execute(
                         """
-                        UPDATE findings SET status=?, severity=?, last_scan_id=?, resolved_scan_id=NULL,
-                            updated_at=CURRENT_TIMESTAMP
+                        UPDATE findings SET status=?, severity=?, title=?, recommendation=?, closure_criteria=?,
+                            details_json=?, last_scan_id=?, resolved_scan_id=NULL, updated_at=CURRENT_TIMESTAMP
                         WHERE id=?
                         """,
-                        (new_status, result.severity, scan_id, existing["id"]),
+                        (
+                            new_status, result.severity, result.title, result.recommendation,
+                            result.closure_criteria, json_dumps(result.diagnosis()), scan_id, existing["id"],
+                        ),
                     )
                     if previous != new_status:
                         db.execute(
@@ -1181,8 +1199,8 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                         db,
                         """
                         INSERT INTO findings(device_id, rule_id, control, title, severity, status, recommendation,
-                            closure_criteria, first_scan_id, last_scan_id)
-                        VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+                            closure_criteria, details_json, first_scan_id, last_scan_id)
+                        VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
                         """,
                         (
                             payload.device_id,
@@ -1192,13 +1210,14 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                             result.severity,
                             result.recommendation,
                             result.closure_criteria,
+                            json_dumps(result.diagnosis()),
                             scan_id,
                             scan_id,
                         ),
                     )
                     db.execute(
                         "INSERT INTO history(finding_id, previous_status, new_status, note, scan_id) VALUES (?, NULL, 'open', ?, ?)",
-                        (finding_id, "Hallazgo generado por el motor de reglas.", scan_id),
+                        (finding_id, (result.detail or "Hallazgo generado por el motor de reglas.")[:1000], scan_id),
                     )
             elif existing and existing["status"] in {"open", "reopened"}:
                 db.execute(
@@ -1416,7 +1435,7 @@ def device_detail(device_id: str, request: Request) -> dict[str, Any]:
             """,
             (device_id,),
         ).fetchall()]
-        findings = [dict(row) for row in db.execute(
+        findings = [finding_view(dict(row)) for row in db.execute(
             "SELECT * FROM findings WHERE device_id=? ORDER BY updated_at DESC",
             (device_id,),
         ).fetchall()]
@@ -1456,7 +1475,9 @@ def device_detail(device_id: str, request: Request) -> dict[str, Any]:
             "modules_error": latest_scan.get("modules_error") if latest_scan else None,
             "controls_pass": len([item for item in control_matrix if item["status"] == "PASS"]),
             "open_findings": len(open_findings),
+            **{f"security_{key}": value for key, value in security_score(findings).items() if key != "open_findings"},
         },
+        "collection_issues": collection_issues(latest_controls),
         "control_matrix": control_matrix,
         "controls": latest_controls,
         "scans": scans,
@@ -1557,10 +1578,18 @@ def dashboard(request: Request) -> dict[str, Any]:
             """,
             (True, company_id),
         )]
-        findings = [dict(row) for row in db.execute(
+        findings = [finding_view(dict(row)) for row in db.execute(
             f"SELECT * FROM findings WHERE {in_company} ORDER BY updated_at DESC", scope
         )]
         open_findings = [finding for finding in findings if finding["status"] != "resolved"]
+        for device in devices:
+            device.update({
+                f"security_{key}": value
+                for key, value in security_score(
+                    [finding for finding in findings if finding["device_id"] == device["device_id"]]
+                ).items()
+            })
+        scores = [device["security_score"] for device in devices]
         return {
             "devices": devices,
             "findings": findings,
@@ -1579,6 +1608,7 @@ def dashboard(request: Request) -> dict[str, Any]:
                 scope,
             )],
             "summary": {
+                "security_score": round(sum(scores) / len(scores)) if scores else None,
                 "devices": len(devices),
                 "online_devices": len([device for device in devices if device["agent_status"] == "online"]),
                 "open_findings": len(open_findings),
@@ -1693,6 +1723,7 @@ def snapshot_from_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         "software_inventory",
         "process_inventory",
         "security_eventlog",
+        "hardening",
         "firewall",
         "updates",
         "antivirus",
@@ -1840,6 +1871,48 @@ def device_view(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def security_score(findings: list[dict[str, Any]]) -> dict[str, Any]:
+    """0-100 score and A-F grade from a device's open findings."""
+    open_findings = [item for item in findings if item.get("status") != "resolved"]
+    penalty = sum(SEVERITY_WEIGHTS.get(str(item.get("severity", "")).lower(), 4) for item in open_findings)
+    score = max(0, 100 - penalty)
+    grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 40 else "F"
+    return {"score": score, "grade": grade, "open_findings": len(open_findings)}
+
+
+def finding_view(row: dict[str, Any]) -> dict[str, Any]:
+    finding = dict(row)
+    finding["diagnosis"] = json_loads(finding.pop("details_json", None)) or {}
+    return finding
+
+
+def collection_issues(controls: dict[str, Any]) -> list[dict[str, Any]]:
+    """Modules of the latest scan that could not verify their control, and why."""
+    metadata = (controls.get("scan_metadata") or {}).get("data") or {}
+    issues = []
+    for module in metadata.get("modules") or []:
+        if not isinstance(module, dict) or module.get("status") == "ok":
+            continue
+        error = str(module.get("error") or "sin detalle")
+        lowered = error.lower()
+        if "denied" in lowered or "denegado" in lowered or "administrator" in lowered or "system" in lowered:
+            hint = "El agente no tuvo permisos suficientes: instalalo como servicio (se ejecuta como SYSTEM)."
+        elif "timeout" in lowered or "timed out" in lowered:
+            hint = "La consulta tardo demasiado; el equipo puede estar sobrecargado o Windows Update ocupado."
+        elif "tercero" in lowered or "third" in lowered:
+            hint = "Hay un antivirus de terceros; su estado debe verificarse en la consola de ese producto."
+        else:
+            hint = "Revisa el registro del agente en C:\\ProgramData\\CyberCheck\\logs\\agent.log."
+        issues.append({
+            "module": module.get("module"),
+            "label": MODULE_LABELS.get(str(module.get("module")), module.get("module")),
+            "status": module.get("status"),
+            "error": error[:300],
+            "hint": hint,
+        })
+    return issues
+
+
 def status_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
     controls = {}
     for key in ("timestamp", "agent_version", "system_info", "scan_metadata"):
@@ -1856,6 +1929,8 @@ def status_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         "software_inventory",
         "process_inventory",
         "security_eventlog",
+        "hardening",
+        "security_detections",
     ):
         if key in evidence:
             controls[key] = evidence[key]

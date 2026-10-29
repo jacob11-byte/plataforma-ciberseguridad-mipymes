@@ -1,4 +1,7 @@
+import { diagnosisBlock } from "/static/modules/findings.js";
+
 const state = { detail: null, ai: null, tab: "resumen" };
+const severityOrder = { Critico: 0, Alto: 1, Medio: 2, Bajo: 3 };
 
 const tabs = [
   ["resumen", "Resumen"],
@@ -17,6 +20,8 @@ const tabs = [
   ["software", "Programas"],
   ["procesos", "Procesos"],
   ["eventlog", "Registro de seguridad"],
+  ["endurecimiento", "Endurecimiento"],
+  ["detecciones", "Detecciones"],
   ["cambios", "Cambios"],
   ["hallazgos", "Problemas"],
   ["evidencias", "Evidencias tecnicas"],
@@ -152,6 +157,7 @@ function render() {
   document.getElementById("deviceTitle").textContent = device.name || device.hostname || device.device_id;
   document.getElementById("deviceSubtitle").textContent = `${device.windows_edition || device.os_version || "Sistema no evaluado"} - ${device.agent_status_label || "Sin conexion"}`;
   document.getElementById("deviceMetrics").innerHTML = [
+    ["Puntaje de seguridad", summary.security_score == null ? "No evaluado" : `${summary.security_score}/100 (${summary.security_grade})`],
     ["Ultima conexion", summary.last_heartbeat || "No evaluado"],
     ["Version del agente", summary.agent_version || "No evaluado"],
     ["Ultima revision completa", summary.last_full_scan?.created_at || "No evaluado"],
@@ -176,6 +182,12 @@ function render() {
 }
 
 function attachTabHandlers() {
+  document.querySelectorAll("[data-goto-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.tab = button.dataset.gotoTab;
+      render();
+    });
+  });
   const aiForm = document.getElementById("aiChatForm");
   if (aiForm) {
     aiForm.addEventListener("submit", async (event) => {
@@ -226,6 +238,8 @@ function renderTab() {
   if (state.tab === "software") return renderModuleTable("Programas instalados", controlData("software_inventory"), ["name", "version", "publisher", "install_date"]);
   if (state.tab === "procesos") return renderModuleTable("Procesos activos", controlData("process_inventory"), ["process_id", "name", "signature_status", "signer", "executable_path"]);
   if (state.tab === "eventlog") return renderModuleTable("Registro de seguridad permitido", controlData("security_eventlog"), ["time_created", "event_id", "provider", "level", "machine"]);
+  if (state.tab === "endurecimiento") return renderModuleObject("Endurecimiento del sistema", controlData("hardening"));
+  if (state.tab === "detecciones") return renderDetections(controlData("security_detections"));
   if (state.tab === "cambios") return renderDiffs(data.diffs);
   if (state.tab === "hallazgos") return renderFindings(data.findings);
   if (state.tab === "evidencias") return renderEvidences(data.evidences);
@@ -277,8 +291,40 @@ function controlData(name) {
   return state.detail.controls[name]?.data;
 }
 
+function openFindingsBySeverity(findings) {
+  return findings
+    .filter((finding) => finding.status !== "resolved")
+    .sort((a, b) => (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9));
+}
+
 function renderSummary(data) {
+  const urgent = openFindingsBySeverity(data.findings).slice(0, 5);
+  const issues = data.collection_issues || [];
+  const grade = data.summary.security_grade;
   return `
+    <section class="score-panel grade-${escapeHtml(grade || "na")}">
+      <div class="score-value">
+        <strong>${data.summary.security_score ?? "-"}</strong><span>/100</span>
+        <em>Nota ${escapeHtml(grade || "-")}</em>
+      </div>
+      <div>
+        <h2>Lo que hay que atender primero</h2>
+        ${urgent.length ? `<ol class="urgent-list">${urgent.map((finding) => `
+          <li>
+            <span class="badge ${escapeHtml(finding.severity)}">${escapeHtml(finding.severity)}</span>
+            <strong>${escapeHtml(finding.title)}</strong>
+            ${finding.diagnosis?.detail ? `<div class="muted">${escapeHtml(finding.diagnosis.detail)}</div>` : ""}
+          </li>`).join("")}</ol>` : `<p class="muted">Sin problemas abiertos en la ultima evidencia.</p>`}
+        ${urgent.length ? `<button type="button" class="small secondary" data-goto-tab="hallazgos">Ver diagnostico completo</button>` : ""}
+      </div>
+    </section>
+    ${issues.length ? `
+      <section class="notice">
+        <strong>Controles que no se pudieron verificar en la ultima revision</strong>
+        <ul class="issue-list">${issues.map((issue) => `
+          <li><strong>${escapeHtml(issue.label)}:</strong> ${escapeHtml(issue.error)}<div class="muted">${escapeHtml(issue.hint)}</div></li>
+        `).join("")}</ul>
+      </section>` : ""}
     <div class="control-matrix">
       ${data.control_matrix.map((item) => `
         <article class="control-tile ${item.status}">
@@ -384,14 +430,31 @@ function renderDevices(data) {
 }
 
 function renderFindings(rows) {
-  return rows.length ? `<div class="findings">${rows.map((finding) => `
-    <article class="finding">
+  const ordered = [...openFindingsBySeverity(rows), ...rows.filter((finding) => finding.status === "resolved")];
+  return ordered.length ? `<div class="findings">${ordered.map((finding) => `
+    <article class="finding ${finding.status === "resolved" ? "is-resolved" : ""}">
       <div class="finding-head"><strong>${escapeHtml(finding.title)}</strong><span class="badge ${finding.status}">${escapeHtml(labelValue(finding.status))}</span></div>
-      <div><span class="badge ${finding.severity}">${escapeHtml(finding.severity)}</span> <span class="muted">${escapeHtml(finding.control)}</span></div>
-      <p>${escapeHtml(finding.recommendation)}</p>
-      <p class="muted">Cierre: ${escapeHtml(finding.closure_criteria)}</p>
+      <div><span class="badge ${finding.severity}">${escapeHtml(finding.severity)}</span> <span class="muted">${escapeHtml(finding.rule_id)}</span></div>
+      ${diagnosisBlock(finding) || `<p>${escapeHtml(finding.recommendation)}</p>`}
+      <p class="muted">Se cierra cuando: ${escapeHtml(finding.closure_criteria)}</p>
     </article>
   `).join("")}</div>` : `<p class="empty-state">Sin problemas registrados.</p>`;
+}
+
+function renderDetections(rows) {
+  const events = Array.isArray(rows) ? rows : [];
+  if (!rows) return noEvaluado("Detecciones");
+  const labels = {
+    4625: "Inicio de sesion fallido", 4720: "Cuenta creada", 4726: "Cuenta eliminada",
+    4732: "Agregado a grupo local", 4740: "Cuenta bloqueada", 1102: "Registro de seguridad borrado",
+    7045: "Servicio instalado",
+  };
+  return `
+    <h2>Eventos de seguridad relevantes (ultimas 24 h)</h2>
+    ${events.length ? table(["time_created", "evento", "target_user", "source_ip", "subject_user", "service_name", "image_path"],
+      events.map((event) => ({ ...event, evento: `${event.event_id} - ${labels[event.event_id] || ""}` })))
+      : `<p class="muted">Sin eventos sospechosos en las ultimas 24 horas.</p>`}
+  `;
 }
 
 function renderEvidences(rows) {

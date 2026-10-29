@@ -9,17 +9,58 @@ export function latestEvidenceByDeviceAndControl(evidences) {
   }, {});
 }
 
+// Copy buttons for fix commands, wherever a diagnosis is rendered.
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest?.(".copy-cmd");
+  if (!button) return;
+  try {
+    await navigator.clipboard.writeText(button.dataset.cmd);
+    button.textContent = "Copiado";
+  } catch (_error) {
+    button.textContent = "Selecciona y copia";
+  }
+  setTimeout(() => { button.textContent = "Copiar"; }, 2000);
+});
+
+// What exactly was found, why it is dangerous and how to fix it. Returns ""
+// for findings stored before diagnoses existed so callers can fall back.
+export function diagnosisBlock(finding) {
+  const diagnosis = finding.diagnosis || {};
+  if (!diagnosis.detail && !diagnosis.risk) return "";
+  const resolved = finding.status === "resolved";
+  const steps = diagnosis.steps || [];
+  const command = diagnosis.fix_command;
+  return `
+    <div class="diagnosis">
+      ${diagnosis.detail ? `<div class="diag-row"><span class="diag-label">${resolved ? "Ultimo problema detectado" : "Que se encontro"}</span><p>${escapeHtml(diagnosis.detail)}</p></div>` : ""}
+      ${diagnosis.risk ? `<div class="diag-row"><span class="diag-label">Por que es peligroso</span><p>${escapeHtml(diagnosis.risk)}</p></div>` : ""}
+      ${steps.length || command ? `
+        <details class="diag-fix" ${resolved ? "" : "open"}>
+          <summary>Como corregirlo</summary>
+          ${steps.length ? `<ol>${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>` : ""}
+          ${command ? `
+            <div class="fix-command">
+              <span class="muted">PowerShell como administrador:</span>
+              <code>${escapeHtml(command)}</code>
+              <button type="button" class="small secondary copy-cmd" data-cmd="${escapeHtml(command)}">Copiar</button>
+            </div>` : ""}
+        </details>` : ""}
+      ${(diagnosis.references || []).length ? `<div class="diag-refs">${diagnosis.references.map((ref) => `<span class="ref-chip">${escapeHtml(ref)}</span>`).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
 export function findingCard(finding, evidence) {
+  const diagnosis = diagnosisBlock(finding);
   return `
     <article class="finding">
       <div class="finding-head">
         <strong>${escapeHtml(finding.title)}</strong>
         <span class="badge ${finding.status}">${statusLabel(finding.status)}</span>
       </div>
-      <div><span class="badge ${finding.severity}">${escapeHtml(finding.severity)}</span> <span class="muted">${escapeHtml(finding.control)}</span></div>
-      ${renderFindingExplanation(finding, evidence)}
-      <p>${escapeHtml(finding.recommendation)}</p>
-      <p class="muted">Cierre: ${escapeHtml(finding.closure_criteria)}</p>
+      <div><span class="badge ${finding.severity}">${escapeHtml(finding.severity)}</span> <span class="muted">${escapeHtml(finding.device_id || "")}</span></div>
+      ${diagnosis || `${renderFindingExplanation(finding, evidence)}<p>${escapeHtml(finding.recommendation)}</p>`}
+      <p class="muted">Se cierra cuando: ${escapeHtml(finding.closure_criteria)}</p>
       ${renderEvidence(evidence)}
     </article>
   `;
