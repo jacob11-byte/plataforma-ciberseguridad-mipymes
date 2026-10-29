@@ -7,7 +7,12 @@ from typing import Any
 
 # Windows PowerShell writes with the OEM code page by default, which mangles
 # accented names ("tactil" -> "tÂ ctil") on Spanish systems. Force UTF-8.
-UTF8_PREAMBLE = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; "
+# The try/catch matters: a service has no interactive console, and a failure
+# here must never abort the real command.
+UTF8_PREAMBLE = (
+    "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+    "$OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; "
+)
 
 
 def run_powershell(script: str, timeout: int = 45) -> Any:

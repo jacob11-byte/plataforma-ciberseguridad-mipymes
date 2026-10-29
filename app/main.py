@@ -1163,6 +1163,7 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                 (scan_id, payload.device_id, f"status_{control}", json_dumps(value)),
             )
         maybe_store_snapshot(db, payload.device_id, scan_id, payload.evidence)
+        prune_device_history(db, payload.device_id)
         for result in rule_results:
             db.execute(
                 "INSERT INTO evidences(scan_id, device_id, control, result_json) VALUES (?, ?, ?, ?)",
@@ -1683,6 +1684,53 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
             },
         }
     return controls
+
+
+SCANS_WITH_EVIDENCE = 40
+SNAPSHOTS_WITH_DATA = 10
+
+
+def prune_device_history(db: Any, device_id: str) -> None:
+    """Bound storage: old scans keep their row, findings and diffs, but drop
+    the bulky evidence payloads and full inventory snapshots."""
+    old_scans = [
+        row["id"] for row in db.execute(
+            "SELECT id FROM scans WHERE device_id=? ORDER BY id DESC LIMIT 100000 OFFSET ?",
+            (device_id, SCANS_WITH_EVIDENCE),
+        ).fetchall()
+    ]
+    for start in range(0, len(old_scans), 500):
+        chunk = old_scans[start:start + 500]
+        # The newest row of every control survives even if its scan is old, so
+        # the panel never loses the last known state of a control.
+        db.execute(
+            f"DELETE FROM evidences WHERE device_id=? AND scan_id IN ({','.join('?' for _ in chunk)}) "
+            "AND id NOT IN (SELECT MAX(id) FROM evidences WHERE device_id=? GROUP BY control)",
+            (device_id, *chunk, device_id),
+        )
+    old_snapshots = [
+        row["id"] for row in db.execute(
+            "SELECT id FROM inventory_snapshots WHERE device_id=? ORDER BY id DESC LIMIT 100000 OFFSET ?",
+            (device_id, SNAPSHOTS_WITH_DATA),
+        ).fetchall()
+    ]
+    for start in range(0, len(old_snapshots), 500):
+        chunk = old_snapshots[start:start + 500]
+        db.execute(
+            f"UPDATE inventory_snapshots SET snapshot_json='{{}}' "
+            f"WHERE id IN ({','.join('?' for _ in chunk)}) AND snapshot_json<>'{{}}'",
+            tuple(chunk),
+        )
+
+
+@app.get("/favicon.ico")
+def favicon() -> Response:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" '
+        'fill="#176b87"/><text x="16" y="22" font-family="Arial" font-size="15" font-weight="700" '
+        'text-anchor="middle" fill="#fff">CC</text></svg>'
+    )
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
 
 
 def maybe_store_snapshot(db: Any, device_id: str, scan_id: int, evidence: dict[str, Any]) -> None:

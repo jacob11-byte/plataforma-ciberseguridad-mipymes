@@ -32,7 +32,7 @@ from agent.modules.security_controls import collect_security_controls
 from agent.modules.software_inventory import collect_installed_software
 from agent.modules.system_inventory import collect_system_inventory
 
-AGENT_VERSION = "0.7.0"
+AGENT_VERSION = "0.7.1"
 LOGGER = logging.getLogger("cybercheck.agent")
 HTTP_TIMEOUT_SECONDS = 60
 HTTP_MAX_ATTEMPTS = 3
