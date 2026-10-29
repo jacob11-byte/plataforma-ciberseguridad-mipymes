@@ -738,6 +738,17 @@ tbody tr:hover { background: #fbfdff; }
 
 .google-btn:hover { background: #f3f6fb; }
 
+.link-btn {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #176b87;
+  font-weight: 600;
+  min-height: 0;
+  padding: 4px;
+  text-decoration: underline;
+}
+
 .auth-divider {
   display: flex;
   align-items: center;

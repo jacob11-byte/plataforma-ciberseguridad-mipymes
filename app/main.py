@@ -6,10 +6,12 @@ import copy
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -100,6 +102,10 @@ TASK_LEASE_SECONDS = 45 * 60
 CREDENTIAL_MAX_AGE_DAYS = int(os.getenv("AGENT_CREDENTIAL_MAX_AGE_DAYS", "90"))
 CREDENTIAL_GRACE_SECONDS = 24 * 60 * 60
 SIGNUP_ATTEMPT_LIMIT = 5
+PASSWORD_RESET_LIMIT = 5
+PASSWORD_RESET_SECONDS = 60 * 60
+OFFLINE_ALERT_HOURS = int(os.getenv("OFFLINE_ALERT_HOURS", "48"))
+OFFLINE_CHECK_SECONDS = 10 * 60
 ENROLLMENT_TOKEN_DAYS = 30
 INSTALLER_CACHE_SECONDS = 60 * 60
 DEFAULT_INSTALLER_URL = (
@@ -154,6 +160,15 @@ class AiChatRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=160)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+    password: str = Field(min_length=1, max_length=256)
+
+
 class SignupRequest(BaseModel):
     company_name: str = Field(min_length=2, max_length=120)
     email: str = Field(min_length=5, max_length=160)
@@ -184,6 +199,7 @@ def startup() -> None:
         default_company = _default_company_id(db)
         # Users created before multi-tenancy belong to the original company.
         db.execute("UPDATE users SET company_id=? WHERE company_id IS NULL", (default_company,))
+    start_offline_watcher()
 
 
 def _production_mode() -> bool:
@@ -510,6 +526,11 @@ def device_report_page(device_id: str, request: Request):
     return FileResponse(WEB_DIR / "report.html")
 
 
+@app.get("/reset")
+def reset_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "reset.html")
+
+
 @app.get("/login")
 def login_page(request: Request):
     if _read_session(request):
@@ -629,7 +650,59 @@ def me(request: Request) -> dict[str, Any]:
 
 @app.get("/api/auth/providers")
 def auth_providers() -> dict[str, Any]:
-    return {"google": _google_enabled(), "signup": _signup_enabled()}
+    return {"google": _google_enabled(), "signup": _signup_enabled(), "reset": alerts.smtp_configured()}
+
+
+@app.post("/api/password/forgot")
+def password_forgot(payload: ForgotPasswordRequest, request: Request) -> dict[str, Any]:
+    """Always answers the same way so it cannot be used to discover accounts."""
+    generic = {"ok": True, "message": "Si el correo tiene una cuenta, enviamos un enlace para restablecer la contrasena."}
+    if not alerts.smtp_configured():
+        raise HTTPException(status_code=503, detail="La recuperacion por correo no esta configurada; contacta al administrador")
+    _check_hourly_limit(request, "forgot", PASSWORD_RESET_LIMIT, "Demasiadas solicitudes; intenta mas tarde")
+    email = payload.email.strip().lower()
+    with connect() as db:
+        user = db.execute(
+            "SELECT id, username FROM users WHERE lower(username)=? AND active=?", (email, True)
+        ).fetchone()
+        if user and "@" in user["username"]:
+            token = secrets.token_urlsafe(32)
+            expires = _db_time(db, datetime.now(timezone.utc) + timedelta(seconds=PASSWORD_RESET_SECONDS))
+            db.execute(
+                "INSERT INTO password_resets(user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+                (user["id"], hash_agent_token(token), expires),
+            )
+            audit(db, user["username"], "password.reset_requested", source=_client_hash(request))
+            alerts.send_password_reset(user["username"], f"{_public_base_url(request)}/reset?token={token}")
+    return generic
+
+
+@app.post("/api/password/reset")
+def password_reset(payload: ResetPasswordRequest, request: Request) -> dict[str, Any]:
+    try:
+        validate_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _check_hourly_limit(request, "reset", PASSWORD_RESET_LIMIT * 4, "Demasiados intentos; intenta mas tarde")
+    with connect() as db:
+        row = db.execute(
+            """
+            SELECT r.id, r.user_id, u.username, u.company_id FROM password_resets r
+            JOIN users u ON u.id = r.user_id
+            WHERE r.token_hash=? AND r.used=? AND r.expires_at > ? AND u.active=?
+            """,
+            (hash_agent_token(payload.token), False, _db_time(db, datetime.now(timezone.utc)), True),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="El enlace no es valido o ya expiro; solicita uno nuevo")
+        db.execute("UPDATE password_resets SET used=? WHERE id=?", (True, row["id"]))
+        # A new password also closes every session opened with the old one.
+        db.execute(
+            "UPDATE users SET password_hash=?, session_epoch=session_epoch+1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (hash_password(payload.password), row["user_id"]),
+        )
+        audit(db, row["username"], "password.reset", source=_client_hash(request), company_id=row["company_id"])
+    return {"ok": True}
 
 
 def _signup_enabled() -> bool:
@@ -637,8 +710,14 @@ def _signup_enabled() -> bool:
 
 
 def _check_signup_limit(request: Request) -> None:
-    """Few accounts per address per hour; shares the login limiter table."""
-    key = "signup:" + _login_client_hash(request)
+    _check_hourly_limit(
+        request, "signup", SIGNUP_ATTEMPT_LIMIT, "Demasiadas cuentas creadas desde esta red; intenta mas tarde"
+    )
+
+
+def _check_hourly_limit(request: Request, scope: str, limit: int, detail: str) -> None:
+    """Per-address hourly limiter; shares the login limiter table."""
+    key = f"{scope}:" + _login_client_hash(request)
     now = int(time.time())
     window = 60 * 60
     with connect() as db:
@@ -655,8 +734,8 @@ def _check_signup_limit(request: Request) -> None:
             (key, now, now - window, now - window),
         )
         row = db.execute("SELECT attempts FROM login_rate_limits WHERE client_hash=?", (key,)).fetchone()
-    if row["attempts"] > SIGNUP_ATTEMPT_LIMIT:
-        raise HTTPException(status_code=429, detail="Demasiadas cuentas creadas desde esta red; intenta mas tarde")
+    if row["attempts"] > limit:
+        raise HTTPException(status_code=429, detail=detail)
 
 
 def _create_account(db: Any, email: str, company_name: str, password_hash: str | None, provider: str) -> int:
@@ -1055,8 +1134,8 @@ def heartbeat(payload: HeartbeatRequest, authorization: str | None = Header(defa
     device = _device_for_token(payload.device_id, authorization)
     with connect() as db:
         db.execute(
-            "UPDATE devices SET last_seen=CURRENT_TIMESTAMP, agent_version=? WHERE device_id=?",
-            (payload.agent_version, payload.device_id),
+            "UPDATE devices SET last_seen=CURRENT_TIMESTAMP, agent_version=?, offline_alerted=? WHERE device_id=?",
+            (payload.agent_version, False, payload.device_id),
         )
         return {
             "ok": True,
@@ -1126,7 +1205,10 @@ def receive_results(
                 raise HTTPException(status_code=409, detail="La tarea no esta entregada a este equipo")
 
         rule_results = evaluate_rules(payload.evidence)
-        db.execute("UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE device_id = ?", (payload.device_id,))
+        db.execute(
+            "UPDATE devices SET last_seen = CURRENT_TIMESTAMP, offline_alerted=? WHERE device_id = ?",
+            (False, payload.device_id),
+        )
         system_info = payload.evidence.get("system_info") or {}
         if system_info:
             db.execute(
@@ -1257,17 +1339,8 @@ def receive_results(
                 (scan_id, payload.task_id, payload.device_id),
             )
         if new_findings and alerts.smtp_configured():
-            recipients = [
-                row["username"] for row in db.execute(
-                    """
-                    SELECT username FROM users
-                    WHERE company_id=? AND active=? AND role IN ('admin', 'technician') AND username LIKE '%@%'
-                    """,
-                    (device["company_id"], True),
-                ).fetchall()
-            ]
             alerts.notify_async(
-                recipients,
+                _alert_recipients(db, device["company_id"]),
                 system_info.get("hostname") or device.get("name") or payload.device_id,
                 new_findings,
                 f"{_public_base_url(request)}/devices/{payload.device_id}",
@@ -1714,6 +1787,76 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
             },
         }
     return controls
+
+
+def _alert_recipients(db: Any, company_id: int) -> list[str]:
+    return [
+        row["username"] for row in db.execute(
+            """
+            SELECT username FROM users
+            WHERE company_id=? AND active=? AND role IN ('admin', 'technician') AND username LIKE '%@%'
+            """,
+            (company_id, True),
+        ).fetchall()
+    ]
+
+
+def check_offline_devices() -> int:
+    """Alert once per outage about enrolled devices that stopped reporting."""
+    if not alerts.smtp_configured():
+        return 0
+    notified = 0
+    panel = os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "el panel de CyberCheck"
+    with connect() as db:
+        cutoff = _db_time(db, datetime.now(timezone.utc) - timedelta(hours=OFFLINE_ALERT_HOURS))
+        rows = db.execute(
+            """
+            SELECT d.device_id, d.name, d.company_id, d.last_seen FROM devices d
+            WHERE d.offline_alerted=? AND d.last_seen IS NOT NULL AND d.last_seen < ?
+                AND EXISTS (SELECT 1 FROM agent_credentials c WHERE c.device_id=d.device_id AND c.active=?)
+            """,
+            (False, cutoff, True),
+        ).fetchall()
+        by_company: dict[int, list[Any]] = {}
+        for row in rows:
+            by_company.setdefault(int(row["company_id"]), []).append(row)
+        for company_id, devices in by_company.items():
+            recipients = _alert_recipients(db, company_id)
+            if not recipients:
+                continue
+            ids = [item["device_id"] for item in devices]
+            db.execute(
+                f"UPDATE devices SET offline_alerted=? WHERE device_id IN ({','.join('?' for _ in ids)})",
+                (True, *ids),
+            )
+            alerts.notify_offline_async(
+                recipients,
+                [{"name": item["name"], "last_seen": str(item["last_seen"])[:19]} for item in devices],
+                OFFLINE_ALERT_HOURS,
+                panel,
+            )
+            notified += len(devices)
+    return notified
+
+
+_watcher_started = False
+
+
+def _offline_watcher() -> None:
+    while True:
+        time.sleep(OFFLINE_CHECK_SECONDS)
+        try:
+            check_offline_devices()
+        except Exception:  # noqa: BLE001 - the watcher must never die
+            logging.getLogger("cybercheck.alerts").exception("Fallo la revision de equipos sin reportar")
+
+
+def start_offline_watcher() -> None:
+    global _watcher_started
+    if _watcher_started or not alerts.smtp_configured():
+        return
+    _watcher_started = True
+    threading.Thread(target=_offline_watcher, name="cybercheck-offline-watcher", daemon=True).start()
 
 
 def _alert_item(result: Any) -> dict[str, Any]:

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nueva contrasena - CyberCheck MIPYME</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-panel">
+      <div class="brand login-brand">
+        <span class="brand-mark">CC</span>
+        <div>
+          <h1>Nueva contrasena</h1>
+          <p>Elige una contrasena de 12 o mas caracteres.</p>
+        </div>
+      </div>
+      <form id="resetForm" class="login-form">
+        <label>
+          Contrasena nueva
+          <input id="password" type="password" autocomplete="new-password" required minlength="12">
+        </label>
+        <label>
+          Repite la contrasena
+          <input id="confirm" type="password" autocomplete="new-password" required minlength="12">
+        </label>
+        <button type="submit">Guardar contrasena</button>
+      </form>
+      <p id="message" class="error" hidden></p>
+      <a id="toLogin" href="/login" hidden>Ir a iniciar sesion</a>
+    </section>
+  </main>
+  <script>
+    const message = document.getElementById("message");
+    const token = new URLSearchParams(location.search).get("token") || "";
+    function show(text, ok = false) {
+      message.textContent = text;
+      message.hidden = !text;
+      message.classList.toggle("error", !ok);
+    }
+    if (!token) {
+      document.getElementById("resetForm").hidden = true;
+      show("El enlace no es valido. Solicita uno nuevo desde la pantalla de inicio de sesion.");
+      document.getElementById("toLogin").hidden = false;
+    }
+    document.getElementById("resetForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (document.getElementById("password").value !== document.getElementById("confirm").value) {
+        show("Las contrasenas no coinciden.");
+        return;
+      }
+      const response = await fetch("/api/password/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, password: document.getElementById("password").value }),
+      }).catch(() => null);
+      const data = response ? await response.json().catch(() => ({})) : {};
+      if (response && response.ok) {
+        document.getElementById("resetForm").hidden = true;
+        show("Contrasena actualizada. Ya puedes iniciar sesion.", true);
+        document.getElementById("toLogin").hidden = false;
+      } else {
+        const detail = Array.isArray(data.detail) ? "Revisa la contrasena ingresada." : data.detail;
+        show(detail || "No se pudo actualizar la contrasena.");
+      }
+    });
+  </script>
+</body>
+</html>

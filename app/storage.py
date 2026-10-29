@@ -194,6 +194,14 @@ CREATE TABLE IF NOT EXISTS enrollment_tokens (
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS password_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    used INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS registration_rate_limits (
     client_hash TEXT PRIMARY KEY,
     window_started BIGINT NOT NULL,
@@ -209,6 +217,7 @@ CREATE TABLE IF NOT EXISTS login_rate_limits (
 POSTGRES_SCHEMA = (
     SQLITE_SCHEMA.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
     .replace("active INTEGER NOT NULL DEFAULT 1", "active BOOLEAN NOT NULL DEFAULT TRUE")
+    .replace("used INTEGER NOT NULL DEFAULT 0", "used BOOLEAN NOT NULL DEFAULT FALSE")
     .replace("created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP", "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP")
     .replace("updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP", "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP")
     .replace("last_seen TEXT", "last_seen TIMESTAMPTZ")
@@ -352,7 +361,7 @@ def migrate_db(db: Database) -> None:
         },
         "agent_credentials": {"expires_at": timestamp_type},
         "admin_audit_log": {"source_hash": "TEXT", "company_id": "INTEGER"},
-        "devices": {"credential_rotation_requested": bool_false},
+        "devices": {"credential_rotation_requested": bool_false, "offline_alerted": bool_false},
         "findings": {"details_json": "TEXT"},
     }
     for table, columns_to_add in added_columns.items():

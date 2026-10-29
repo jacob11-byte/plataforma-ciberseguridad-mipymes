@@ -45,6 +45,17 @@
           <input id="password" name="password" type="password" autocomplete="current-password" required>
         </label>
         <button type="submit">Iniciar sesion</button>
+        <button type="button" id="forgotLink" class="link-btn" hidden>Olvide mi contrasena</button>
+      </form>
+
+      <form id="forgotForm" class="login-form" hidden>
+        <p class="muted">Escribe tu correo y te enviaremos un enlace para elegir una contrasena nueva.</p>
+        <label>
+          Correo
+          <input id="forgotEmail" type="email" autocomplete="email" required>
+        </label>
+        <button type="submit">Enviar enlace</button>
+        <button type="button" id="forgotBack" class="link-btn">Volver</button>
       </form>
 
       <form id="signupForm" class="login-form" hidden>
@@ -72,6 +83,8 @@
     function showError(message) {
       errorBox.textContent = message;
       errorBox.hidden = !message;
+      errorBox.classList.add("error");
+      errorBox.classList.remove("muted");
     }
     function selectTab(name) {
       document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
@@ -79,8 +92,32 @@
       });
       document.getElementById("loginForm").hidden = name !== "login";
       document.getElementById("signupForm").hidden = name !== "signup";
+      document.getElementById("forgotForm").hidden = true;
       showError("");
     }
+    function showForgot(visible) {
+      document.getElementById("loginForm").hidden = visible;
+      document.getElementById("forgotForm").hidden = !visible;
+      showError("");
+    }
+    document.getElementById("forgotLink").addEventListener("click", () => showForgot(true));
+    document.getElementById("forgotBack").addEventListener("click", () => showForgot(false));
+    document.getElementById("forgotForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const response = await fetch("/api/password/forgot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: document.getElementById("forgotEmail").value }),
+      }).catch(() => null);
+      const data = response ? await response.json().catch(() => ({})) : {};
+      showError(response && response.ok ? "" : (data.detail || "No se pudo enviar la solicitud."));
+      if (response && response.ok) {
+        errorBox.textContent = data.message;
+        errorBox.hidden = false;
+        errorBox.classList.remove("error");
+        errorBox.classList.add("muted");
+      }
+    });
     document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
       tab.addEventListener("click", () => selectTab(tab.dataset.authTab));
     });
@@ -93,6 +130,7 @@
       document.getElementById("googleBtn").hidden = !providers.google;
       document.getElementById("googleDivider").hidden = !providers.google;
       document.getElementById("signupTab").hidden = !providers.signup;
+      document.getElementById("forgotLink").hidden = !providers.reset;
     }).catch(() => {});
 
     async function submitJson(url, body) {

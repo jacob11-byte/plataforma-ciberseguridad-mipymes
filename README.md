@@ -35,6 +35,12 @@ SMTP_PASSWORD=...
 SMTP_FROM=alertas@tu-dominio.com
 ```
 
+El mismo SMTP habilita la **recuperacion de contrasena** (enlace de un solo uso
+valido 1 hora; cambiar la contrasena cierra las sesiones abiertas) y un aviso
+cuando un equipo **deja de reportar** durante `OFFLINE_ALERT_HOURS` horas
+(48 por defecto), una vez por caida; un agente desactivado por un atacante
+se nota asi. `PUBLIC_BASE_URL` define el dominio usado en los enlaces.
+
 Sin `SMTP_HOST` las alertas quedan desactivadas. En el detalle de cada equipo,
 **Informe PDF** abre un informe listo para entregar al cliente (puntaje,
 datos del equipo, cada problema con su diagnostico y los controles no
