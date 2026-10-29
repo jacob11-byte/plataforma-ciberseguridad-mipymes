@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Informe de seguridad - CyberCheck</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef2f7; color: #172033; font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+    .toolbar { position: sticky; top: 0; display: flex; gap: 10px; justify-content: flex-end; padding: 10px 24px; background: #0f2a3d; }
+    .toolbar button { border: 0; border-radius: 8px; padding: 9px 16px; font-weight: 700; background: #ffffff; color: #0f2a3d; cursor: pointer; }
+    .sheet { max-width: 860px; margin: 24px auto; padding: 40px 48px; background: #ffffff; box-shadow: 0 6px 24px rgba(15, 42, 61, .12); }
+    h1 { margin: 0; font-size: 26px; }
+    h2 { margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #176b87; font-size: 17px; color: #176b87; }
+    .muted { color: #64748b; }
+    .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+    .grade { min-width: 110px; padding: 12px; border-radius: 12px; text-align: center; color: #ffffff; background: #94a3b8; }
+    .grade strong { display: block; font-size: 38px; line-height: 1.05; }
+    .grade-A { background: #1f8a55; } .grade-B { background: #4f9d3a; } .grade-C { background: #c98a00; }
+    .grade-D { background: #d9600c; } .grade-F { background: #b3122e; }
+    .counts { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .count { flex: 1 1 110px; border: 1px solid #dde3ee; border-radius: 10px; padding: 10px; text-align: center; }
+    .count strong { display: block; font-size: 24px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    td, th { padding: 5px 8px; border-bottom: 1px solid #e5eaf2; text-align: left; vertical-align: top; }
+    th { width: 34%; color: #475569; font-weight: 600; }
+    .finding { margin: 14px 0; padding: 12px 14px; border: 1px solid #dde3ee; border-left-width: 5px; border-radius: 8px; break-inside: avoid; }
+    .finding.sev-Critico { border-left-color: #b3122e; } .finding.sev-Alto { border-left-color: #d9a400; }
+    .finding.sev-Medio { border-left-color: #2f80b8; } .finding.sev-Bajo { border-left-color: #94a3b8; }
+    .finding h3 { margin: 0 0 6px; font-size: 15px; }
+    .sev { display: inline-block; margin-right: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #eef2f7; }
+    .label { margin: 8px 0 2px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #176b87; }
+    .finding p, .finding ol { margin: 0; } .finding ol { padding-left: 20px; }
+    code { display: block; margin-top: 6px; padding: 7px 9px; border-radius: 6px; background: #0f172a; color: #e2e8f0; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    .refs { margin-top: 8px; font-size: 11px; color: #64748b; }
+    footer { margin-top: 32px; padding-top: 10px; border-top: 1px solid #dde3ee; font-size: 11px; color: #64748b; }
+    @media print {
+      body { background: #ffffff; }
+      .toolbar { display: none; }
+      .sheet { max-width: none; margin: 0; padding: 0; box-shadow: none; }
+      .grade, .finding, code { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      @page { margin: 16mm 14mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar"><button id="printBtn" type="button">Imprimir o guardar como PDF</button></div>
+  <main class="sheet" id="sheet"><p class="muted">Generando informe...</p></main>
+  <script>
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const order = { Critico: 0, Alto: 1, Medio: 2, Bajo: 3 };
+    const deviceId = decodeURIComponent(location.pathname.split("/").filter(Boolean).at(-2) || "");
+
+    function findingHtml(finding) {
+      const d = finding.diagnosis || {};
+      return `
+        <article class="finding sev-${esc(finding.severity)}">
+          <h3><span class="sev">${esc(finding.severity)}</span>${esc(finding.title)}</h3>
+          ${d.detail ? `<div class="label">Que se encontro</div><p>${esc(d.detail)}</p>` : ""}
+          ${d.risk ? `<div class="label">Por que es peligroso</div><p>${esc(d.risk)}</p>` : ""}
+          ${(d.steps || []).length ? `<div class="label">Como corregirlo</div><ol>${d.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>` : `<div class="label">Recomendacion</div><p>${esc(finding.recommendation)}</p>`}
+          ${d.fix_command ? `<code>${esc(d.fix_command)}</code>` : ""}
+          ${(d.references || []).length ? `<div class="refs">Referencias: ${d.references.map(esc).join(" · ")}</div>` : ""}
+        </article>`;
+    }
+
+    async function build() {
+      const [me, detail] = await Promise.all([
+        fetch("/api/me").then((r) => (r.status === 401 ? (location.href = "/login", null) : r.json())),
+        fetch(`/api/devices/${encodeURIComponent(deviceId)}/detail`).then((r) => (r.ok ? r.json() : null)),
+      ]);
+      if (!me) return;
+      if (!detail) { document.getElementById("sheet").innerHTML = "<p>No se encontro el equipo.</p>"; return; }
+      const { device, summary, findings } = detail;
+      const open = findings.filter((f) => f.status !== "resolved").sort((a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
+      const resolved = findings.filter((f) => f.status === "resolved");
+      const count = (sev) => open.filter((f) => f.severity === sev).length;
+      const info = detail.controls?.system_info?.data || {};
+      const inv = detail.controls?.system_inventory_v2?.data?.data || detail.controls?.system_inventory_v2?.data || {};
+      const rows = [
+        ["Equipo", device.name || device.hostname], ["Sistema operativo", device.windows_edition || info.windows_edition],
+        ["Version / compilacion", [inv.windows_version, inv.windows_build].filter(Boolean).join(" / ")],
+        ["Fabricante y modelo", [inv.manufacturer, inv.model].filter(Boolean).join(" ")], ["Dominio", inv.domain],
+        ["Direccion IP", device.ip_address], ["Version del agente", device.agent_version],
+        ["Ultima revision completa", summary.last_full_scan?.created_at],
+      ].filter(([, v]) => v);
+      const issues = detail.collection_issues || [];
+      document.title = `Informe ${device.name || device.hostname} - CyberCheck`;
+      document.getElementById("sheet").innerHTML = `
+        <div class="head">
+          <div>
+            <div class="muted">${esc(me.company_name || "CyberCheck MIPYME")} · Informe de seguridad</div>
+            <h1>${esc(device.name || device.hostname)}</h1>
+            <div class="muted">Generado el ${new Date().toLocaleString()} por ${esc(me.username)}</div>
+          </div>
+          <div class="grade grade-${esc(summary.security_grade || "")}"><strong>${esc(summary.security_score ?? "-")}</strong>de 100 · Nota ${esc(summary.security_grade || "-")}</div>
+        </div>
+        <div class="counts">
+          <div class="count"><strong>${count("Critico")}</strong>Criticos</div><div class="count"><strong>${count("Alto")}</strong>Altos</div>
+          <div class="count"><strong>${count("Medio")}</strong>Medios</div><div class="count"><strong>${count("Bajo")}</strong>Bajos</div>
+          <div class="count"><strong>${resolved.length}</strong>Corregidos</div>
+        </div>
+        <h2>Datos del equipo</h2>
+        <table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
+        <h2>Problemas abiertos (${open.length})</h2>
+        ${open.length ? open.map(findingHtml).join("") : "<p>No hay problemas abiertos en la ultima evidencia recibida.</p>"}
+        ${issues.length ? `<h2>Controles que no se pudieron verificar</h2><table>${issues.map((i) => `<tr><th>${esc(i.label)}</th><td>${esc(i.error)}<br><span class="muted">${esc(i.hint)}</span></td></tr>`).join("")}</table>` : ""}
+        ${resolved.length ? `<h2>Problemas corregidos (${resolved.length})</h2><table>${resolved.map((f) => `<tr><th>${esc(f.title)}</th><td>${esc(f.updated_at)}</td></tr>`).join("")}</table>` : ""}
+        <footer>Informe basado en la evidencia tecnica recolectada por el agente CyberCheck. Los hallazgos reflejan el estado del equipo en la fecha de la ultima revision.</footer>`;
+    }
+    document.getElementById("printBtn").addEventListener("click", () => window.print());
+    build().catch(() => { document.getElementById("sheet").innerHTML = "<p>No se pudo generar el informe.</p>"; });
+  </script>
+</body>
+</html>

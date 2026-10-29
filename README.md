@@ -20,6 +20,26 @@ resultados sin conexion, aplicacion de bandeja con estado sanitizado, bloqueo
 contra procesos solapados, tareas con lease e identificador idempotente, y
 estados parciales cuando una consulta no produjo evidencia suficiente.
 
+### Alertas por correo e informes
+
+Con un servidor SMTP configurado, cada vez que un equipo muestra un problema
+**nuevo** (o reabierto) de gravedad Critica o Alta, los administradores y
+tecnicos de esa cuenta cuyo usuario es un correo reciben un mensaje con el
+detalle y el enlace al diagnostico. Un correo por revision, no por problema.
+
+```text
+SMTP_HOST=smtp.tu-proveedor.com
+SMTP_PORT=587            # 465 usa SSL directo
+SMTP_USER=...
+SMTP_PASSWORD=...
+SMTP_FROM=alertas@tu-dominio.com
+```
+
+Sin `SMTP_HOST` las alertas quedan desactivadas. En el detalle de cada equipo,
+**Informe PDF** abre un informe listo para entregar al cliente (puntaje,
+datos del equipo, cada problema con su diagnostico y los controles no
+verificados); desde el navegador se guarda como PDF.
+
 ### Diagnostico de cada problema
 
 Cada hallazgo explica, con los datos reales del equipo:

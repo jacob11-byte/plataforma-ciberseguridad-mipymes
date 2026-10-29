@@ -33,6 +33,7 @@ from .accounts import (
     validate_username,
     verify_password,
 )
+from . import alerts
 from .ai_service import answer_company_question, answer_device_question, company_ai_summary, device_ai_summary
 from .rules import evaluate_rules
 from .storage import connect, generate_device_id, generate_token, hash_agent_token, init_db, insert_returning_id, json_dumps
@@ -500,6 +501,13 @@ def device_page(device_id: str, request: Request):
     if not _read_session(request):
         return RedirectResponse("/login", status_code=302)
     return FileResponse(WEB_DIR / "device.html")
+
+
+@app.get("/devices/{device_id}/report")
+def device_report_page(device_id: str, request: Request):
+    if not _read_session(request):
+        return RedirectResponse("/login", status_code=302)
+    return FileResponse(WEB_DIR / "report.html")
 
 
 @app.get("/login")
@@ -1091,8 +1099,11 @@ def rotate_agent_credential(
 
 
 @app.post("/api/agent/results")
-def receive_results(payload: ScanRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    _device_for_token(payload.device_id, authorization)
+def receive_results(
+    payload: ScanRequest, request: Request, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    device = _device_for_token(payload.device_id, authorization)
+    new_findings: list[dict[str, Any]] = []
     if payload.scan_type not in ALLOWED_TASKS:
         raise HTTPException(status_code=400, detail="Tipo de tarea no permitido")
 
@@ -1177,6 +1188,8 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                 if existing:
                     previous = existing["status"]
                     new_status = "reopened" if previous == "resolved" else "open"
+                    if previous == "resolved":
+                        new_findings.append(_alert_item(result))
                     # The diagnosis is refreshed on every scan so it always
                     # names what is wrong right now (accounts, KBs, IPs...).
                     db.execute(
@@ -1220,6 +1233,7 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                         "INSERT INTO history(finding_id, previous_status, new_status, note, scan_id) VALUES (?, NULL, 'open', ?, ?)",
                         (finding_id, (result.detail or "Hallazgo generado por el motor de reglas.")[:1000], scan_id),
                     )
+                    new_findings.append(_alert_item(result))
             elif existing and existing["status"] in {"open", "reopened"}:
                 db.execute(
                     """
@@ -1241,6 +1255,22 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                 WHERE id=? AND device_id=?
                 """,
                 (scan_id, payload.task_id, payload.device_id),
+            )
+        if new_findings and alerts.smtp_configured():
+            recipients = [
+                row["username"] for row in db.execute(
+                    """
+                    SELECT username FROM users
+                    WHERE company_id=? AND active=? AND role IN ('admin', 'technician') AND username LIKE '%@%'
+                    """,
+                    (device["company_id"], True),
+                ).fetchall()
+            ]
+            alerts.notify_async(
+                recipients,
+                system_info.get("hostname") or device.get("name") or payload.device_id,
+                new_findings,
+                f"{_public_base_url(request)}/devices/{payload.device_id}",
             )
         return {"scan_id": scan_id, "evaluated_rules": len(rule_results), "duplicate": False}
 
@@ -1684,6 +1714,10 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
             },
         }
     return controls
+
+
+def _alert_item(result: Any) -> dict[str, Any]:
+    return {"severity": result.severity, "title": result.title, "detail": result.detail}
 
 
 SCANS_WITH_EVIDENCE = 40

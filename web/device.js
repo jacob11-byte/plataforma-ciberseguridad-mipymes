@@ -563,6 +563,9 @@ function escapeHtml(value) {
 }
 
 document.getElementById("refreshBtn").addEventListener("click", loadDetail);
+document.getElementById("reportBtn").addEventListener("click", () => {
+  window.open(`/devices/${encodeURIComponent(deviceIdFromPath())}/report`, "_blank");
+});
 document.getElementById("reactivateBtn").addEventListener("click", async () => {
   const response = await fetch(`/api/devices/${encodeURIComponent(deviceIdFromPath())}/reactivate`, { method: "POST" });
   if (response.status === 401) {
