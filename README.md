@@ -134,18 +134,48 @@ powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1
 El instalador usa `pythonw.exe`, oculta la tarea y evita instancias paralelas.
 No combines este modo con el servicio empresarial.
 
-### Instalacion autocontenida para piloto empresarial
+### Instalador de doble clic (recomendado)
 
-Para no depender de Python en cada equipo, genera los tres ejecutables sin
-consola: agente bajo demanda, servicio y bandeja. PyInstaller solo es una
-dependencia de compilacion y no se instala en los endpoints:
+`CyberCheckSetup.exe` instala el agente en cualquier PC o VM Windows sin
+escribir comandos: se copia al equipo, se abre con doble clic, Windows pide
+permiso de administrador una vez y el equipo queda registrado y vigilado.
+
+Generarlo (una sola vez, en el equipo de desarrollo):
+
+1. Copia `agent/enrollment.example.json` a `agent/enrollment.json` y pon en
+   `registration_code` el mismo valor que `AGENT_REGISTRATION_CODE` en Render.
+   Ese archivo esta en `.gitignore` y nunca debe contener `device_id` ni `token`.
+2. Compila:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-agent-build.txt
 powershell -ExecutionPolicy Bypass -File agent/build_standalone.ps1 -PythonExe .venv\Scripts\python.exe
 ```
 
-Despues, desde PowerShell como administrador:
+El resultado es `dist\CyberCheckSetup.exe`. Al ejecutarlo:
+
+- detiene y reemplaza versiones anteriores y elimina tareas programadas heredadas;
+- repara permisos de instalaciones previas en `ProgramData\CyberCheck`;
+- conserva la identidad del equipo al actualizar, y lo vuelve a registrar si
+  el panel ya no reconoce su credencial (por ejemplo, tras cambiar de base de datos);
+- registra el servicio, el icono de bandeja y la entrada en
+  **Configuracion > Aplicaciones** para desinstalarlo.
+
+Despliegue masivo (GPO, Intune, RMM) sin ventanas:
+
+```text
+CyberCheckSetup.exe /quiet
+CyberCheckSetup.exe /uninstall /quiet          conserva configuracion y cola
+CyberCheckSetup.exe /uninstall /purge /quiet   elimina tambien los datos
+```
+
+El registro de la instalacion queda en `C:\ProgramData\CyberCheck\setup.log`.
+El ejecutable aun no esta firmado: Windows SmartScreen puede mostrar
+"Editor desconocido" hasta que se firme con un certificado de firma de codigo.
+
+### Instalacion con scripts de PowerShell (alternativa)
+
+Desde PowerShell como administrador, tras compilar:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File agent/install_enterprise_agent.ps1

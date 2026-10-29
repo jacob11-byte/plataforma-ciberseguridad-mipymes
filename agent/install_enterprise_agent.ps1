@@ -41,6 +41,15 @@ foreach ($taskName in @("CyberCheck MIPYME Agent", "CyberCheck MIPYME Agent User
     }
 }
 
+# Archivos de instalaciones anteriores pueden tener ACL que niegan incluso a
+# Administradores; tomar posesion permite reescribirlos.
+foreach ($path in @($DataRoot, $InstallRoot)) {
+    if (Test-Path -LiteralPath $path) {
+        & icacls.exe $path /setowner '*S-1-5-32-544' /T /C /Q | Out-Null
+        & icacls.exe $path /reset /T /C /Q | Out-Null
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataRoot, $publicRoot | Out-Null
 Copy-Item -LiteralPath $sourceAgent -Destination $installedAgent -Force
 Copy-Item -LiteralPath $sourceService -Destination $installedService -Force

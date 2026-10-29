@@ -1,0 +1,7 @@
+{
+  "api_url": "https://plataforma-ciberseguridad-mipymes.onrender.com",
+  "registration_code": "MISMO_VALOR_QUE_AGENT_REGISTRATION_CODE_EN_RENDER",
+  "company_name": "MIPYME Principal",
+  "backup_path": "C:\\Backups",
+  "risk_services": ["TermService", "RemoteRegistry", "WinRM"]
+}
