@@ -1,5 +1,5 @@
 param(
-    [string]$TaskName = "CyberCheck MIPYME Agent",
+    [string]$ServiceName = "CyberCheckAgent",
     [string]$InstallRoot = (Join-Path $env:ProgramFiles "CyberCheck\Agent"),
     [string]$DataRoot = (Join-Path $env:ProgramData "CyberCheck"),
     [switch]$RemoveData
@@ -12,11 +12,26 @@ if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Adm
     throw "Abre PowerShell como administrador para desinstalar el agente."
 }
 
-foreach ($name in @($TaskName, "CyberCheck MIPYME Agent User") | Select-Object -Unique) {
-    if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
-        Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName $name -Confirm:$false
-        Write-Host "Tarea eliminada: $name"
+$runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+Remove-ItemProperty -Path $runKey -Name "CyberCheckTray" -ErrorAction SilentlyContinue
+Get-Process -Name "CyberCheckTray" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+$service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($service) {
+    if ($service.Status -ne "Stopped") {
+        Stop-Service -Name $ServiceName -Force
+        $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
+    }
+    & sc.exe delete $ServiceName | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo eliminar el servicio $ServiceName" }
+    Write-Host "Servicio eliminado: $ServiceName"
+}
+
+foreach ($taskName in @("CyberCheck MIPYME Agent", "CyberCheck MIPYME Agent User")) {
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Host "Tarea heredada eliminada: $taskName"
     }
 }
 
@@ -27,7 +42,7 @@ if (-not $resolvedInstallRoot.StartsWith($programFilesRoot, [System.StringCompar
 }
 if (Test-Path -LiteralPath $resolvedInstallRoot) {
     Remove-Item -LiteralPath $resolvedInstallRoot -Recurse -Force
-    Write-Host "Binario eliminado: $resolvedInstallRoot"
+    Write-Host "Componentes eliminados: $resolvedInstallRoot"
 }
 
 if ($RemoveData) {
@@ -38,8 +53,8 @@ if ($RemoveData) {
     }
     if (Test-Path -LiteralPath $resolvedDataRoot) {
         Remove-Item -LiteralPath $resolvedDataRoot -Recurse -Force
-        Write-Host "Configuracion, token y logs eliminados: $resolvedDataRoot"
+        Write-Host "Configuracion, cola y logs eliminados: $resolvedDataRoot"
     }
 } else {
-    Write-Host "Los datos se conservaron en $DataRoot. Usa -RemoveData para eliminarlos."
+    Write-Host "Datos conservados en $DataRoot. Usa -RemoveData para eliminarlos."
 }

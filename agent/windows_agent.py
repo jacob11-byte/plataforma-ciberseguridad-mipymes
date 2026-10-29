@@ -24,13 +24,14 @@ if __package__ in {None, ""}:
 
 from agent.core.modules import run_module
 from agent.core.powershell import run_powershell
+from agent.outbox import Outbox
 from agent.modules.eventlog import collect_security_events
 from agent.modules.process_inventory import collect_processes
 from agent.modules.security_controls import collect_security_controls
 from agent.modules.software_inventory import collect_installed_software
 from agent.modules.system_inventory import collect_system_inventory
 
-AGENT_VERSION = "0.3.0"
+AGENT_VERSION = "0.4.0"
 LOGGER = logging.getLogger("cybercheck.agent")
 HTTP_TIMEOUT_SECONDS = 60
 HTTP_MAX_ATTEMPTS = 3
@@ -132,13 +133,28 @@ def configure_logging() -> None:
 
 
 def log_failure(context: str, exc: Exception, config: dict[str, Any] | None = None) -> None:
+    message = redact_error(exc, config)
+    LOGGER.error("%s: %s: %s", context, type(exc).__name__, message[:500])
+
+
+def redact_error(exc: Exception, config: dict[str, Any] | None = None) -> str:
     message = str(exc)
     if config:
         for key in ("token", "registration_code"):
             secret = config.get(key)
             if isinstance(secret, str) and secret:
                 message = message.replace(secret, "[REDACTED]")
-    LOGGER.error("%s: %s: %s", context, type(exc).__name__, message[:500])
+    return message[:500]
+
+
+def load_agent_config(config_path: Path) -> dict[str, Any]:
+    config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(config, dict):
+        raise ValueError("La configuracion debe ser un objeto JSON")
+    if os.getenv("API_BASE_URL"):
+        config["api_url"] = os.environ["API_BASE_URL"]
+    validate_agent_config(config)
+    return config
 
 
 def validate_agent_config(config: dict[str, Any]) -> None:
@@ -701,34 +717,101 @@ def request_json(method: str, url: str, token: str, body: dict[str, Any] | None 
     return open_json_with_retry(request)
 
 
+def is_transient_request_error(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or exc.code >= 500
+    return isinstance(
+        exc,
+        (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError),
+    )
+
+
+def result_outbox() -> Outbox:
+    return Outbox()
+
+
+def flush_outbox(config: dict[str, Any], limit: int = 20) -> dict[str, int]:
+    outbox = result_outbox()
+    sent = 0
+    results_url = f"{config['api_url'].rstrip('/')}/api/agent/results"
+    for item in outbox.ready(limit=limit):
+        try:
+            try:
+                request_json("POST", results_url, config["token"], item.payload)
+            except urllib.error.HTTPError as exc:
+                # The task may have been cancelled or failed while the device
+                # was offline; keep the evidence as an ad-hoc scan instead of
+                # discarding it.
+                if exc.code != 409 or item.payload.get("task_id") is None:
+                    raise
+                LOGGER.warning(
+                    "La tarea %s ya no acepta resultados; se entrega como verificacion independiente",
+                    item.payload.get("task_id"),
+                )
+                request_json("POST", results_url, config["token"], {**item.payload, "task_id": None})
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {redact_error(exc, config)}"
+            if is_transient_request_error(exc):
+                outbox.mark_retry(item.id, message, item.attempts)
+                LOGGER.warning("La API sigue sin responder; quedan resultados en la cola offline")
+                break
+            outbox.mark_dead(item.id, message)
+            LOGGER.error("Resultado %s movido a revision manual: %s", item.request_id, message)
+            continue
+        outbox.mark_sent(item.id)
+        sent += 1
+        LOGGER.info("Resultado offline entregado: %s", item.request_id)
+    stats = outbox.stats()
+    return {"sent": sent, "pending": stats["pending"], "dead": stats["dead"]}
+
+
 def send_scan(
     config: dict[str, Any],
     task_type: str,
     *,
     task_id: int | None = None,
     request_id: str | None = None,
+    queue_on_failure: bool = True,
 ) -> dict[str, Any]:
     if task_type not in ALLOWED_TASKS:
         raise ValueError(f"Tarea no permitida: {task_type}")
     LOGGER.info("Iniciando verificacion %s", task_type)
     evidence = collect_evidence(config, task_type)
-    result = request_json(
-        "POST",
-        f"{config['api_url'].rstrip('/')}/api/agent/results",
-        config["token"],
-        {
-            "device_id": config["device_id"],
-            "scan_type": task_type,
-            "evidence": evidence,
-            "request_id": request_id or (f"task-id:{task_id}" if task_id is not None else str(uuid.uuid4())),
-            "task_id": task_id,
-        },
+    result_request_id = request_id or (
+        f"task-id:{task_id}" if task_id is not None else str(uuid.uuid4())
     )
+    payload = {
+        "device_id": config["device_id"],
+        "scan_type": task_type,
+        "evidence": evidence,
+        "request_id": result_request_id,
+        "task_id": task_id,
+    }
+    try:
+        result = request_json(
+            "POST",
+            f"{config['api_url'].rstrip('/')}/api/agent/results",
+            config["token"],
+            payload,
+        )
+    except Exception as exc:
+        if not queue_on_failure or not is_transient_request_error(exc):
+            raise
+        inserted = result_outbox().enqueue(result_request_id, payload)
+        LOGGER.warning(
+            "Resultado guardado en cola offline (%s): %s",
+            "nuevo" if inserted else "ya existente",
+            result_request_id,
+        )
+        return {"queued": True, "request_id": result_request_id}
     LOGGER.info("Resultado enviado: %s", task_type)
     return result
 
 
 def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
+    queue_status = flush_outbox(config)
+    if queue_status["sent"]:
+        LOGGER.info("Resultados recuperados de la cola: %s", queue_status["sent"])
     send_heartbeat(config)
     LOGGER.info("Heartbeat enviado")
     url = (
@@ -742,7 +825,10 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
     for task in tasks:
         try:
             LOGGER.info("Ejecutando tarea %s: %s", task["id"], task["task_type"])
-            send_scan(config, task["task_type"], task_id=int(task["id"]))
+            result = send_scan(config, task["task_type"], task_id=int(task["id"]))
+            if result.get("queued"):
+                LOGGER.info("Tarea %s queda pendiente hasta recuperar conectividad", task["id"])
+                continue
             request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
             LOGGER.info("Tarea completada: %s", task["id"])
         except urllib.error.HTTPError as exc:
@@ -802,12 +888,7 @@ def main() -> int:
         instance_lock.acquire()
         if args.interval < 1 or args.max_tasks < 1:
             raise ValueError("--interval y --max-tasks deben ser mayores que cero")
-        # ``utf-8-sig`` also accepts ordinary UTF-8 and is tolerant of the BOM
-        # that Windows PowerShell commonly adds when it writes JSON files.
-        config = json.loads(config_path.read_text(encoding="utf-8-sig"))
-        if os.getenv("API_BASE_URL"):
-            config["api_url"] = os.getenv("API_BASE_URL")
-        validate_agent_config(config)
+        config = load_agent_config(config_path)
         LOGGER.info("Agente iniciado en %s", socket.gethostname())
         ensure_registered(config, config_path)
         if args.register:

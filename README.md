@@ -13,11 +13,12 @@ Prototipo funcional para detectar configuraciones inseguras en equipos Windows a
 
 ## Estado del producto
 
-La version actual es un piloto `0.3` de una sola organizacion. El agente usa una
+La version actual es un piloto `0.4` de una sola organizacion. El agente usa una
 lista cerrada de verificaciones; ninguna IA ejecuta comandos en los equipos.
-Incluye ejecucion silenciosa con `pythonw.exe`, bloqueo contra procesos
-solapados, tareas con lease e identificador idempotente, y estados parciales
-cuando una consulta no produjo evidencia suficiente.
+Incluye un servicio de Windows independiente de la sesion, cola SQLite para
+resultados sin conexion, aplicacion de bandeja con estado sanitizado, bloqueo
+contra procesos solapados, tareas con lease e identificador idempotente, y
+estados parciales cuando una consulta no produjo evidencia suficiente.
 
 La integracion Wazuh incluida es todavia un cliente de lectura y laboratorio;
 no se activa solamente definiendo variables de entorno. El aislamiento entre
@@ -101,33 +102,20 @@ py -3.12 agent/windows_agent.py --config agent/agent_config.render.json --regist
 py -3.12 agent/windows_agent.py --config agent/agent_config.render.json --scan FULL_SCAN
 ```
 
-Para instalar una tarea programada silenciosa que consulte verificaciones cada
-5 minutos en una estacion de trabajo con usuario conectado:
+La tarea programada se conserva solo como modo de desarrollo o compatibilidad:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1
 ```
 
-El instalador usa `pythonw.exe`, oculta la tarea, evita instancias paralelas y
-elimina la tarea heredada `CyberCheck MIPYME Agent User`. No crees tareas con
-nombres alternativos porque quedarían dos agentes ejecutándose.
-
-Para una VM o servidor que debe funcionar antes del inicio de sesion, abre
-PowerShell como administrador e instala la tarea bajo `SYSTEM`:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1 -RunAsSystem
-```
-
-La opcion `-RunElevated` mantiene el modo interactivo del usuario y solo debe
-usarse para pruebas. Para equipos empresariales y VMs se recomienda
-`-RunAsSystem`.
+El instalador usa `pythonw.exe`, oculta la tarea y evita instancias paralelas.
+No combines este modo con el servicio empresarial.
 
 ### Instalacion autocontenida para piloto empresarial
 
-Para no depender de Python en cada equipo, genera primero el ejecutable sin
-consola. PyInstaller solo es una dependencia de compilacion y no se instala en
-los endpoints:
+Para no depender de Python en cada equipo, genera los tres ejecutables sin
+consola: agente bajo demanda, servicio y bandeja. PyInstaller solo es una
+dependencia de compilacion y no se instala en los endpoints:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-agent-build.txt
@@ -140,15 +128,20 @@ Despues, desde PowerShell como administrador:
 powershell -ExecutionPolicy Bypass -File agent/install_enterprise_agent.ps1
 ```
 
-Esto copia el binario a `Program Files`, guarda configuración, token y logs en
-`ProgramData` con ACL para Administradores/SYSTEM, y registra una unica tarea
-oculta bajo `SYSTEM`. Para desinstalar conservando datos:
+Esto instala `CyberCheckAgent` como servicio de inicio automatico diferido bajo
+`SYSTEM`, registra el icono de bandeja para los inicios de sesion y elimina las
+tareas programadas heredadas. La configuracion, el token, la cola offline y los
+logs se guardan en `ProgramData` con acceso de Administradores/SYSTEM. La
+bandeja solo puede leer `ProgramData\CyberCheck\public\status.json` y nunca
+recibe credenciales.
+
+Para desinstalar conservando configuracion, cola y logs:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File agent/uninstall_enterprise_agent.ps1
 ```
 
-Agrega `-RemoveData` únicamente si también deseas eliminar configuración,
+Agrega `-RemoveData` unicamente si tambien deseas eliminar configuracion, cola,
 token y logs.
 
 La API publica dos comprobaciones operativas:

@@ -18,26 +18,35 @@ New-Item -ItemType Directory -Force -Path $output, $work | Out-Null
 
 Push-Location $projectRoot
 try {
-    & $python -m PyInstaller `
-        --noconfirm `
-        --clean `
-        --onefile `
-        --windowed `
-        --name CyberCheckAgent `
-        --paths $projectRoot `
-        --distpath $output `
-        --workpath $work `
-        --specpath $work `
-        (Join-Path $PSScriptRoot "windows_agent.py")
-    if ($LASTEXITCODE -ne 0) {
-        throw "PyInstaller termino con codigo $LASTEXITCODE"
+    $artifacts = @(
+        @{ Name = "CyberCheckAgent"; Script = "windows_agent.py" },
+        @{ Name = "CyberCheckService"; Script = "windows_service.py" },
+        @{ Name = "CyberCheckTray"; Script = "windows_tray.py" }
+    )
+    foreach ($artifact in $artifacts) {
+        & $python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --windowed `
+            --name $artifact.Name `
+            --paths $projectRoot `
+            --distpath $output `
+            --workpath $work `
+            --specpath $work `
+            (Join-Path $PSScriptRoot $artifact.Script)
+        if ($LASTEXITCODE -ne 0) {
+            throw "PyInstaller fallo al generar $($artifact.Name) con codigo $LASTEXITCODE"
+        }
     }
 } finally {
     Pop-Location
 }
 
-$artifact = Join-Path $output "CyberCheckAgent.exe"
-if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
-    throw "No se genero $artifact"
+foreach ($name in @("CyberCheckAgent.exe", "CyberCheckService.exe", "CyberCheckTray.exe")) {
+    $artifactPath = Join-Path $output $name
+    if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
+        throw "No se genero $artifactPath"
+    }
+    Write-Host "Componente generado: $artifactPath"
 }
-Write-Host "Agente autocontenido generado: $artifact"
