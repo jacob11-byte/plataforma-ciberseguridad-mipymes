@@ -1,7 +1,9 @@
 import { dashboardModules, renderModule } from "/static/modules/dashboardModules.js";
 import { escapeHtml } from "/static/modules/utils.js";
 
-const state = { dashboard: null, ai: null, user: null, users: null, audit: null, activeModule: "computadoras" };
+const state = {
+  dashboard: null, ai: null, user: null, users: null, audit: null, install: null, activeModule: "computadoras",
+};
 
 async function ensureSession() {
   const response = await fetch("/api/me");
@@ -10,7 +12,8 @@ async function ensureSession() {
     return false;
   }
   state.user = await response.json();
-  document.getElementById("currentUser").textContent = `${state.user.username} (${state.user.role_label || state.user.role})`;
+  const company = state.user.company_name ? ` - ${state.user.company_name}` : "";
+  document.getElementById("currentUser").textContent = `${state.user.username} (${state.user.role_label || state.user.role})${company}`;
   return true;
 }
 
@@ -117,6 +120,9 @@ function attachModuleHandlers() {
   document.querySelectorAll(".rotate-btn").forEach((button) => {
     button.addEventListener("click", () => rotateCredential(button.dataset.deviceId));
   });
+  const addDeviceBtn = document.getElementById("addDeviceBtn");
+  if (addDeviceBtn) addDeviceBtn.addEventListener("click", downloadInstaller);
+  if (state.install) renderInstallNotice();
   const userForm = document.getElementById("userForm");
   if (userForm) userForm.addEventListener("submit", createUser);
   document.querySelectorAll(".user-role").forEach((select) => {
@@ -229,6 +235,85 @@ async function reactivateDevice(deviceId) {
   const data = await response.json();
   notice.innerHTML = `<strong>Agente reactivado</strong><p>${escapeHtml(data.message || "El agente fue reactivado.")}</p>`;
   await loadDashboard();
+}
+
+// --- Agregar computadora -------------------------------------------------
+// The installer download carries a company-bound enrollment token in its
+// file name; the page then waits until the new device reports in.
+
+function renderInstallNotice() {
+  const notice = document.getElementById("installNotice");
+  if (!notice || !state.install) return;
+  const { phase, message, device } = state.install;
+  notice.hidden = false;
+  notice.classList.toggle("detected", phase === "detected");
+  if (phase === "downloading") {
+    notice.innerHTML = "<strong>Preparando el instalador...</strong><p>La primera descarga puede tardar unos segundos.</p>";
+  } else if (phase === "error") {
+    notice.innerHTML = `<strong>No se pudo descargar el instalador</strong><p class="error">${escapeHtml(message)}</p>`;
+  } else if (phase === "waiting") {
+    notice.innerHTML = `
+      <strong>Instalador descargado</strong>
+      <ol class="install-steps">
+        <li>Abre <strong>CyberCheckSetup</strong> en la computadora que quieres proteger (puedes copiarlo por USB o correo interno).</li>
+        <li>Acepta el permiso de administrador de Windows. Si aparece "Windows protegio su PC", elige <em>Mas informacion &gt; Ejecutar de todas formas</em>.</li>
+        <li>Listo: el equipo aparecera aqui solo. No cambies el nombre del archivo.</li>
+      </ol>
+      <p class="muted">Esperando que la computadora se conecte...</p>`;
+  } else if (phase === "detected") {
+    notice.innerHTML = `<strong>Computadora conectada: ${escapeHtml(device)}</strong><p>Su primera revision de seguridad ya esta en camino.</p>`;
+  }
+}
+
+async function downloadInstaller() {
+  const baseline = new Set((state.dashboard?.devices || []).map((device) => device.device_id));
+  state.install = { phase: "downloading" };
+  renderInstallNotice();
+  try {
+    const response = await fetch("/api/agent/installer");
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `Error ${response.status}`);
+    }
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = match ? match[1] : "CyberCheckSetup.exe";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
+  } catch (error) {
+    state.install = { phase: "error", message: error.message };
+    renderInstallNotice();
+    return;
+  }
+  state.install = { phase: "waiting" };
+  renderInstallNotice();
+  waitForNewDevice(baseline);
+}
+
+async function waitForNewDevice(baseline) {
+  const deadline = Date.now() + 30 * 60_000;
+  while (state.install?.phase === "waiting" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 8_000));
+    const response = await fetch("/api/dashboard").catch(() => null);
+    if (!response || !response.ok) continue;
+    const dashboard = await response.json();
+    const added = dashboard.devices.find((device) => !baseline.has(device.device_id));
+    if (added) {
+      state.dashboard = dashboard;
+      state.install = { phase: "detected", device: added.name || added.hostname || added.device_id };
+      render();
+      return;
+    }
+  }
 }
 
 function userNotice(message, isError = false) {

@@ -38,12 +38,17 @@ export function renderModule(moduleId, state) {
 
 function renderDevicesModule(state) {
   const { devices } = state.dashboard;
+  const canInstall = can(state.user, "technician");
   return `
     <div class="section-title">
       <h2>Computadoras</h2>
-      ${can(state.user, "technician") ? taskFormHtml(devices) : ""}
+      <div class="row-actions">
+        ${canInstall ? `<button id="addDeviceBtn" type="button">+ Agregar computadora</button>` : ""}
+        ${canInstall ? taskFormHtml(devices) : ""}
+      </div>
     </div>
-    <p class="empty-state" ${devices.length ? "hidden" : ""}>Aun no hay computadoras registradas. Instala el agente en una computadora para comenzar.</p>
+    <div id="installNotice" class="notice" hidden></div>
+    <p class="empty-state" ${devices.length ? "hidden" : ""}>Aun no hay computadoras registradas.${canInstall ? " Pulsa <strong>Agregar computadora</strong>, abre el archivo descargado en el equipo y aparecera aqui automaticamente." : ""}</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Computadora</th><th>Sistema</th><th>Agente</th><th>Ultimo contacto</th><th>Accion</th></tr></thead>
@@ -210,7 +215,7 @@ function renderUsersModule(state) {
     <div class="section-title">
       <div>
         <h2>Usuarios</h2>
-        <p>El administrador inicial <strong>${escapeHtml(data.bootstrap_admin)}</strong> se configura con variables de entorno.</p>
+        <p>${data.bootstrap_admin ? `El administrador inicial <strong>${escapeHtml(data.bootstrap_admin)}</strong> se configura con variables de entorno.` : "Invita a tu equipo con su correo y una contrasena inicial."}</p>
       </div>
       <form id="userForm">
         <input id="newUsername" placeholder="usuario" autocomplete="off" required>
@@ -239,6 +244,9 @@ const auditLabels = {
   "device.reactivate": "Equipo reactivado",
   "device.rotation_requested": "Rotacion de credencial solicitada",
   "device.credential_rotated": "Credencial del agente renovada",
+  "account.signup": "Cuenta creada",
+  "installer.download": "Instalador descargado",
+  "installer.revoke": "Instaladores invalidados",
   "user.create": "Usuario creado",
   "user.update": "Usuario modificado",
 };

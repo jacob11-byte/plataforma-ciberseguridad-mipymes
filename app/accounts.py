@@ -12,6 +12,7 @@ from .storage import json_dumps
 ROLE_LEVELS = {"viewer": 1, "technician": 2, "admin": 3}
 ROLE_LABELS = {"viewer": "Solo lectura", "technician": "Tecnico", "admin": "Administrador"}
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
+EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$")
 MIN_PASSWORD_LENGTH = 12
 
 _SCRYPT_N = 2**14
@@ -62,10 +63,20 @@ def burn_password_check(password: str) -> None:
     verify_password(password, _DUMMY_HASH)
 
 
+def validate_email(email: str) -> str:
+    email = email.strip().lower()
+    if len(email) > 160 or not EMAIL_PATTERN.fullmatch(email):
+        raise ValueError("Ingresa un correo electronico valido")
+    return email
+
+
 def validate_username(username: str) -> str:
+    """Accept either an e-mail address or a short local username."""
     username = username.strip()
+    if "@" in username:
+        return validate_email(username)
     if not USERNAME_PATTERN.fullmatch(username):
-        raise ValueError("El usuario debe tener 3-64 caracteres: letras, numeros, punto, guion o guion bajo")
+        raise ValueError("El usuario debe ser un correo o tener 3-64 caracteres: letras, numeros, punto o guiones")
     return username
 
 
@@ -95,11 +106,12 @@ def audit(
     target_id: Any = None,
     details: dict[str, Any] | None = None,
     source: str | None = None,
+    company_id: int | None = None,
 ) -> None:
     db.execute(
         """
-        INSERT INTO admin_audit_log(actor, action, target_type, target_id, details_json, source_hash)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO admin_audit_log(actor, action, target_type, target_id, details_json, source_hash, company_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             actor[:120],
@@ -108,6 +120,7 @@ def audit(
             None if target_id is None else str(target_id)[:120],
             json_dumps(details or {}),
             source,
+            company_id,
         ),
     )
 
@@ -116,6 +129,7 @@ def public_user(row: Any) -> dict[str, Any]:
     user = dict(row)
     user.pop("password_hash", None)
     user.pop("session_epoch", None)
+    user.pop("company_id", None)
     user["active"] = user.get("active") not in {False, 0, "0"}
     user["role_label"] = ROLE_LABELS.get(user.get("role"), user.get("role"))
     return user

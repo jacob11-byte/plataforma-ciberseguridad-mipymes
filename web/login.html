@@ -14,40 +14,117 @@
           <span class="brand-mark">CC</span>
           <div>
             <h1>CyberCheck MIPYME</h1>
-            <p>Acceso al panel de seguridad de computadoras.</p>
+            <p>Seguridad de las computadoras de tu empresa, en un solo panel.</p>
           </div>
         </div>
       </div>
+
+      <div class="auth-tabs" role="tablist">
+        <button type="button" class="tab active" data-auth-tab="login" role="tab">Iniciar sesion</button>
+        <button type="button" class="tab" data-auth-tab="signup" role="tab" id="signupTab">Crear cuenta</button>
+      </div>
+
+      <a id="googleBtn" class="google-btn" href="/auth/google/start" hidden>
+        <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
+          <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.7 6c4.5-4.2 6.9-10.3 6.9-17.7z"/>
+          <path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/>
+          <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.7-6c-2.2 1.5-5 2.3-8.2 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/>
+        </svg>
+        Continuar con Google
+      </a>
+      <p id="googleDivider" class="auth-divider" hidden><span>o con tu correo</span></p>
+
       <form id="loginForm" class="login-form">
         <label>
-          Usuario
+          Correo o usuario
           <input id="username" name="username" autocomplete="username" required>
         </label>
         <label>
           Contrasena
           <input id="password" name="password" type="password" autocomplete="current-password" required>
         </label>
-        <p id="loginError" class="error" hidden>Usuario o contrasena incorrectos.</p>
         <button type="submit">Iniciar sesion</button>
       </form>
+
+      <form id="signupForm" class="login-form" hidden>
+        <label>
+          Nombre de tu empresa
+          <input id="signupCompany" autocomplete="organization" required minlength="2" maxlength="120">
+        </label>
+        <label>
+          Correo
+          <input id="signupEmail" type="email" autocomplete="email" required>
+        </label>
+        <label>
+          Contrasena (minimo 12 caracteres)
+          <input id="signupPassword" type="password" autocomplete="new-password" required minlength="12">
+        </label>
+        <button type="submit">Crear cuenta</button>
+        <p class="muted">Cada cuenta es una empresa independiente: solo tu equipo vera sus computadoras.</p>
+      </form>
+
+      <p id="authError" class="error" hidden></p>
     </section>
   </main>
   <script>
-    document.getElementById("loginForm").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const response = await fetch("/api/login", {
+    const errorBox = document.getElementById("authError");
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.hidden = !message;
+    }
+    function selectTab(name) {
+      document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.authTab === name);
+      });
+      document.getElementById("loginForm").hidden = name !== "login";
+      document.getElementById("signupForm").hidden = name !== "signup";
+      showError("");
+    }
+    document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
+      tab.addEventListener("click", () => selectTab(tab.dataset.authTab));
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error")) showError(params.get("error"));
+    if (params.get("tab") === "signup") selectTab("signup");
+
+    fetch("/api/auth/providers").then((response) => response.json()).then((providers) => {
+      document.getElementById("googleBtn").hidden = !providers.google;
+      document.getElementById("googleDivider").hidden = !providers.google;
+      document.getElementById("signupTab").hidden = !providers.signup;
+    }).catch(() => {});
+
+    async function submitJson(url, body) {
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: document.getElementById("username").value,
-          password: document.getElementById("password").value,
-        }),
+        body: JSON.stringify(body),
       });
       if (response.ok) {
         window.location.href = "/";
-      } else {
-        document.getElementById("loginError").hidden = false;
+        return;
       }
+      const data = await response.json().catch(() => ({}));
+      const detail = Array.isArray(data.detail) ? "Revisa los datos ingresados." : data.detail;
+      showError(detail || "No se pudo completar la solicitud.");
+    }
+
+    document.getElementById("loginForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitJson("/api/login", {
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+      }).catch(() => showError("No se pudo conectar con el servidor."));
+    });
+
+    document.getElementById("signupForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitJson("/api/signup", {
+        company_name: document.getElementById("signupCompany").value,
+        email: document.getElementById("signupEmail").value,
+        password: document.getElementById("signupPassword").value,
+      }).catch(() => showError("No se pudo conectar con el servidor."));
     });
   </script>
 </body>

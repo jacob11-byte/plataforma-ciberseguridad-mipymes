@@ -184,6 +184,16 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
     source_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS enrollment_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL REFERENCES companies(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    created_by TEXT NOT NULL,
+    uses INTEGER NOT NULL DEFAULT 0,
+    revoked INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS registration_rate_limits (
     client_hash TEXT PRIMARY KEY,
     window_started BIGINT NOT NULL,
@@ -341,7 +351,7 @@ def migrate_db(db: Database) -> None:
             if db.is_postgres else "TEXT",
         },
         "agent_credentials": {"expires_at": timestamp_type},
-        "admin_audit_log": {"source_hash": "TEXT"},
+        "admin_audit_log": {"source_hash": "TEXT", "company_id": "INTEGER"},
         "devices": {"credential_rotation_requested": bool_false},
     }
     for table, columns_to_add in added_columns.items():
@@ -351,6 +361,8 @@ def migrate_db(db: Database) -> None:
                 db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
 
     db.execute("CREATE INDEX IF NOT EXISTS idx_audit_created ON admin_audit_log(created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_audit_company ON admin_audit_log(company_id, id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_devices_company ON devices(company_id)")
     db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_scans_device_request "
         "ON scans(device_id, request_id) WHERE request_id IS NOT NULL"

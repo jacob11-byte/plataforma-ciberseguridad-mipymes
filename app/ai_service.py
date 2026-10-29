@@ -36,8 +36,8 @@ def device_ai_summary(db: Any, device_id: str) -> dict[str, Any]:
     return analyze_context(context)
 
 
-def company_ai_summary(db: Any) -> dict[str, Any]:
-    context = build_company_context(db)
+def company_ai_summary(db: Any, company_id: int) -> dict[str, Any]:
+    context = build_company_context(db, company_id)
     if not context["devices"]:
         return insufficient_response()
     return analyze_context(context)
@@ -50,8 +50,8 @@ def answer_device_question(db: Any, device_id: str, question: str) -> dict[str, 
     return answer_question(context, question)
 
 
-def answer_company_question(db: Any, question: str) -> dict[str, Any]:
-    context = build_company_context(db)
+def answer_company_question(db: Any, company_id: int, question: str) -> dict[str, Any]:
+    context = build_company_context(db, company_id)
     if not context["devices"]:
         return insufficient_response()
     return answer_question(context, question)
@@ -107,22 +107,38 @@ def build_device_context(db: Any, device_id: str) -> dict[str, Any]:
     }
 
 
-def build_company_context(db: Any) -> dict[str, Any]:
-    devices = rows(db.execute("SELECT * FROM devices ORDER BY last_seen DESC NULLS LAST LIMIT 80").fetchall())
-    findings = rows(db.execute("SELECT * FROM findings ORDER BY updated_at DESC LIMIT 200").fetchall())
-    scans = rows(db.execute("SELECT * FROM scans ORDER BY created_at DESC LIMIT 80").fetchall())
+COMPANY_DEVICES = "device_id IN (SELECT device_id FROM devices WHERE company_id=?)"
+
+
+def build_company_context(db: Any, company_id: int) -> dict[str, Any]:
+    scope = (company_id,)
+    devices = rows(db.execute(
+        "SELECT * FROM devices WHERE company_id=? ORDER BY last_seen DESC NULLS LAST LIMIT 80", scope
+    ).fetchall())
+    findings = rows(db.execute(
+        f"SELECT * FROM findings WHERE {COMPANY_DEVICES} ORDER BY updated_at DESC LIMIT 200", scope
+    ).fetchall())
+    scans = rows(db.execute(
+        f"SELECT * FROM scans WHERE {COMPANY_DEVICES} ORDER BY created_at DESC LIMIT 80", scope
+    ).fetchall())
     evidences = rows(
         db.execute(
-            """
+            f"""
             SELECT e.*, s.scan_type FROM evidences e
             JOIN scans s ON s.id=e.scan_id
+            WHERE e.{COMPANY_DEVICES}
             ORDER BY e.created_at DESC, e.id DESC
             LIMIT 240
-            """
+            """,
+            scope,
         ).fetchall()
     )
-    diffs = rows(db.execute("SELECT * FROM snapshot_diffs ORDER BY created_at DESC LIMIT 40").fetchall())
-    tasks = rows(db.execute("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 80").fetchall())
+    diffs = rows(db.execute(
+        f"SELECT * FROM snapshot_diffs WHERE {COMPANY_DEVICES} ORDER BY created_at DESC LIMIT 40", scope
+    ).fetchall())
+    tasks = rows(db.execute(
+        f"SELECT * FROM tasks WHERE {COMPANY_DEVICES} ORDER BY created_at DESC LIMIT 80", scope
+    ).fetchall())
     return {
         "scope": "company",
         "device": None,

@@ -9,11 +9,13 @@ import json
 import os
 from pathlib import Path
 import secrets
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
@@ -26,6 +28,7 @@ from .accounts import (
     public_user,
     role_allows,
     validate_password,
+    validate_email,
     validate_role,
     validate_username,
     verify_password,
@@ -82,6 +85,12 @@ LOGIN_ATTEMPT_LIMIT = 10
 TASK_LEASE_SECONDS = 45 * 60
 CREDENTIAL_MAX_AGE_DAYS = int(os.getenv("AGENT_CREDENTIAL_MAX_AGE_DAYS", "90"))
 CREDENTIAL_GRACE_SECONDS = 24 * 60 * 60
+SIGNUP_ATTEMPT_LIMIT = 5
+ENROLLMENT_TOKEN_DAYS = 30
+INSTALLER_CACHE_SECONDS = 60 * 60
+DEFAULT_INSTALLER_URL = (
+    "https://github.com/jacob11-byte/plataforma-ciberseguridad-mipymes/releases/latest/download/CyberCheckSetup.exe"
+)
 _DEV_SESSION_SECRET = secrets.token_urlsafe(48)
 
 app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
@@ -131,6 +140,12 @@ class AiChatRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
 
 
+class SignupRequest(BaseModel):
+    company_name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=160)
+    password: str = Field(min_length=1, max_length=256)
+
+
 class UserCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=1, max_length=256)
@@ -151,6 +166,10 @@ class CredentialRotationRequest(BaseModel):
 def startup() -> None:
     validate_security_config()
     init_db()
+    with connect() as db:
+        default_company = _default_company_id(db)
+        # Users created before multi-tenancy belong to the original company.
+        db.execute("UPDATE users SET company_id=? WHERE company_id IS NULL", (default_company,))
 
 
 def _production_mode() -> bool:
@@ -243,18 +262,64 @@ def _session_user(request: Request) -> dict[str, Any] | None:
     if expiry < int(time.time()):
         return None
     if hmac.compare_digest(username, _admin_username()):
-        user = {"username": username, "role": "admin", "bootstrap": True}
+        with connect() as db:
+            company_id = _default_company_id(db)
+        user = {"username": username, "role": "admin", "bootstrap": True, "company_id": company_id}
     else:
         with connect() as db:
             row = db.execute(
-                "SELECT username, role, active, session_epoch FROM users WHERE username=?",
+                "SELECT username, role, active, session_epoch, company_id FROM users WHERE username=?",
                 (username,),
             ).fetchone()
-        if not row or row["active"] in {False, 0, "0"} or int(row["session_epoch"]) != session_epoch:
+        if (
+            not row
+            or row["active"] in {False, 0, "0"}
+            or int(row["session_epoch"]) != session_epoch
+            or row["company_id"] is None
+        ):
             return None
-        user = {"username": row["username"], "role": row["role"], "bootstrap": False}
+        user = {
+            "username": row["username"],
+            "role": row["role"],
+            "bootstrap": False,
+            "company_id": int(row["company_id"]),
+        }
     request.state.user = user
     return user
+
+
+def _default_company_name() -> str:
+    return os.getenv("DEFAULT_COMPANY_NAME", "MIPYME Principal")
+
+
+def _default_company_id(db: Any) -> int:
+    """Company of the bootstrap admin and of agents enrolled with the global code."""
+    row = db.execute(
+        "SELECT id FROM companies WHERE name=? ORDER BY id LIMIT 1", (_default_company_name(),)
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    return insert_returning_id(db, "INSERT INTO companies(name) VALUES (?)", (_default_company_name(),))
+
+
+def _company_id(request: Request) -> int:
+    user = _session_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sesion requerida")
+    return int(user["company_id"])
+
+
+def _company_device(db: Any, device_id: str, company_id: int) -> dict[str, Any]:
+    """Load a device only if it belongs to the caller's company.
+
+    Devices of other tenants answer 404, never 403, so their IDs cannot be probed.
+    """
+    row = db.execute(
+        "SELECT * FROM devices WHERE device_id=? AND company_id=?", (device_id, company_id)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Equipo no existe")
+    return dict(row)
 
 
 def _read_session(request: Request) -> str | None:
@@ -464,46 +529,63 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
     source = client_hash[:16]
     role: str | None = None
     epoch = 0
-    if hmac.compare_digest(payload.username, _admin_username()):
+    username = payload.username.strip()
+    company_id: int | None = None
+    if hmac.compare_digest(username, _admin_username()):
         if hmac.compare_digest(payload.password, _admin_password()):
             role = "admin"
+            with connect() as db:
+                company_id = _default_company_id(db)
     else:
         with connect() as db:
             row = db.execute(
-                "SELECT id, role, active, password_hash, session_epoch FROM users WHERE username=?",
-                (payload.username,),
+                """
+                SELECT id, username, role, active, password_hash, session_epoch, company_id
+                FROM users WHERE lower(username)=lower(?)
+                """,
+                (username,),
             ).fetchone()
         if row is None:
             burn_password_check(payload.password)
         elif verify_password(payload.password, row["password_hash"]) and row["active"] not in {False, 0, "0"}:
             role = row["role"]
             epoch = int(row["session_epoch"])
+            username = row["username"]
+            company_id = row["company_id"]
             with connect() as db:
                 db.execute("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?", (row["id"],))
     if role is None:
         with connect() as db:
-            audit(db, payload.username[:64] or "?", "login.failure", source=source)
+            audit(db, username[:64] or "?", "login.failure", source=source)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
     _clear_login_limit(client_hash)
     with connect() as db:
-        audit(db, payload.username, "login.success", details={"role": role}, source=source)
-    response = JSONResponse({"ok": True, "username": payload.username, "role": role})
+        audit(db, username, "login.success", details={"role": role}, source=source, company_id=company_id)
+    return _session_response({"ok": True, "username": username, "role": role}, username, epoch)
+
+
+def _session_response(body: dict[str, Any], username: str, epoch: int) -> JSONResponse:
+    response = JSONResponse(body)
+    _set_session_cookie(response, username, epoch)
+    return response
+
+
+def _set_session_cookie(response: Response, username: str, epoch: int) -> None:
     response.set_cookie(
         SESSION_COOKIE,
-        _create_session(payload.username, epoch),
+        _create_session(username, epoch),
         max_age=SESSION_MAX_AGE,
         httponly=True,
         secure=_production_mode() or os.getenv("COOKIE_SECURE", "true").lower() != "false",
         samesite="strict",
     )
-    return response
 
 
 @app.post("/api/logout")
 def logout(request: Request) -> Response:
     username = _require_user(request)
     with connect() as db:
-        audit(db, username, "logout", source=_client_hash(request))
+        audit(db, username, "logout", source=_client_hash(request), company_id=_company_id(request))
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE)
     return response
@@ -513,23 +595,210 @@ def logout(request: Request) -> Response:
 def me(request: Request) -> dict[str, Any]:
     _require_user(request)
     user = _session_user(request) or {}
+    with connect() as db:
+        company = db.execute("SELECT name FROM companies WHERE id=?", (user.get("company_id"),)).fetchone()
     return {
         "username": user.get("username"),
         "role": user.get("role"),
         "role_label": ROLE_LABELS.get(user.get("role", ""), user.get("role")),
         "bootstrap": user.get("bootstrap", False),
+        "company_name": company["name"] if company else None,
     }
+
+
+@app.get("/api/auth/providers")
+def auth_providers() -> dict[str, Any]:
+    return {"google": _google_enabled(), "signup": _signup_enabled()}
+
+
+def _signup_enabled() -> bool:
+    return os.getenv("SIGNUP_ENABLED", "true").strip().lower() not in {"0", "false", "no"}
+
+
+def _check_signup_limit(request: Request) -> None:
+    """Few accounts per address per hour; shares the login limiter table."""
+    key = "signup:" + _login_client_hash(request)
+    now = int(time.time())
+    window = 60 * 60
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO login_rate_limits(client_hash, window_started, attempts)
+            VALUES (?, ?, 1)
+            ON CONFLICT(client_hash) DO UPDATE SET
+                window_started = CASE WHEN login_rate_limits.window_started < ?
+                    THEN excluded.window_started ELSE login_rate_limits.window_started END,
+                attempts = CASE WHEN login_rate_limits.window_started < ?
+                    THEN 1 ELSE login_rate_limits.attempts + 1 END
+            """,
+            (key, now, now - window, now - window),
+        )
+        row = db.execute("SELECT attempts FROM login_rate_limits WHERE client_hash=?", (key,)).fetchone()
+    if row["attempts"] > SIGNUP_ATTEMPT_LIMIT:
+        raise HTTPException(status_code=429, detail="Demasiadas cuentas creadas desde esta red; intenta mas tarde")
+
+
+def _create_account(db: Any, email: str, company_name: str, password_hash: str | None, provider: str) -> int:
+    """Create an isolated company with ``email`` as its first administrator."""
+    company_id = insert_returning_id(db, "INSERT INTO companies(name) VALUES (?)", (company_name,))
+    insert_returning_id(
+        db,
+        "INSERT INTO users(company_id, username, role, password_hash) VALUES (?, ?, 'admin', ?)",
+        (company_id, email, password_hash),
+    )
+    audit(db, email, "account.signup", target_type="company", target_id=company_id,
+          details={"company": company_name, "provider": provider}, company_id=company_id)
+    return company_id
+
+
+@app.post("/api/signup")
+def signup(payload: SignupRequest, request: Request) -> JSONResponse:
+    if not _signup_enabled():
+        raise HTTPException(status_code=403, detail="El registro de cuentas esta deshabilitado")
+    try:
+        email = validate_email(payload.email)
+        validate_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    company_name = payload.company_name.strip()
+    if len(company_name) < 2:
+        raise HTTPException(status_code=400, detail="Escribe el nombre de tu empresa")
+    if email == _admin_username().lower():
+        raise HTTPException(status_code=409, detail="Ese correo ya tiene una cuenta")
+    _check_signup_limit(request)
+    with connect() as db:
+        if db.execute("SELECT id FROM users WHERE lower(username)=?", (email,)).fetchone():
+            raise HTTPException(status_code=409, detail="Ese correo ya tiene una cuenta; inicia sesion")
+        _create_account(db, email, company_name, hash_password(payload.password), "password")
+    return _session_response({"ok": True, "username": email, "role": "admin"}, email, 0)
+
+
+# --- Google sign-in (OpenID Connect, authorization code flow) ---------------------
+
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+OAUTH_STATE_COOKIE = "cybercheck_oauth_state"
+
+
+def _google_enabled() -> bool:
+    return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
+
+
+def _public_base_url(request: Request) -> str:
+    configured = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    base = str(request.base_url).rstrip("/")
+    # Render terminates TLS at its proxy, so the app itself sees http://.
+    if _production_mode() and base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    return base
+
+
+def _google_redirect_uri(request: Request) -> str:
+    return f"{_public_base_url(request)}/auth/google/callback"
+
+
+def _login_error_redirect(message: str) -> RedirectResponse:
+    return RedirectResponse(f"/login?error={quote(message)}", status_code=302)
+
+
+@app.get("/auth/google/start")
+def google_start(request: Request) -> Response:
+    if not _google_enabled():
+        return _login_error_redirect("El inicio con Google no esta configurado")
+    state = secrets.token_urlsafe(24)
+    params = {
+        "client_id": os.environ["GOOGLE_CLIENT_ID"],
+        "redirect_uri": _google_redirect_uri(request),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+    }
+    response = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urlencode(params)}", status_code=302)
+    # Lax (not Strict) so the cookie survives Google's top-level redirect back.
+    response.set_cookie(
+        OAUTH_STATE_COOKIE, state, max_age=600, httponly=True, samesite="lax",
+        secure=_production_mode() or os.getenv("COOKIE_SECURE", "true").lower() != "false",
+    )
+    return response
+
+
+def _google_profile(code: str, redirect_uri: str) -> dict[str, Any]:
+    with httpx.Client(timeout=15) as client:
+        token_response = client.post(GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": os.environ["GOOGLE_CLIENT_ID"],
+            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+        token_response.raise_for_status()
+        access_token = token_response.json()["access_token"]
+        profile = client.get(GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"})
+        profile.raise_for_status()
+        return profile.json()
+
+
+@app.get("/auth/google/callback")
+def google_callback(request: Request, code: str = "", state: str = "", error: str = "") -> Response:
+    expected_state = request.cookies.get(OAUTH_STATE_COOKIE, "")
+    if error or not code or not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        return _login_error_redirect("No se pudo completar el inicio con Google")
+    try:
+        profile = _google_profile(code, _google_redirect_uri(request))
+        email = validate_email(str(profile.get("email", "")))
+    except (httpx.HTTPError, KeyError, ValueError):
+        return _login_error_redirect("Google no confirmo tu cuenta; intenta de nuevo")
+    if profile.get("email_verified") is not True:
+        return _login_error_redirect("Tu correo de Google no esta verificado")
+    with connect() as db:
+        row = db.execute(
+            "SELECT username, active, session_epoch, company_id FROM users WHERE lower(username)=?", (email,)
+        ).fetchone()
+        if row and row["active"] in {False, 0, "0"}:
+            return _login_error_redirect("Tu usuario esta desactivado")
+        if row:
+            username, epoch, company_id = row["username"], int(row["session_epoch"]), row["company_id"]
+            db.execute("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE lower(username)=?", (email,))
+        else:
+            if not _signup_enabled():
+                return _login_error_redirect("No existe una cuenta para ese correo")
+            name = str(profile.get("name") or email.split("@", 1)[0]).strip()[:80]
+            username, epoch = email, 0
+            company_id = _create_account(db, email, f"Empresa de {name}", None, "google")
+        audit(db, username, "login.success", details={"provider": "google"},
+              source=_client_hash(request), company_id=company_id)
+    # A same-origin page performs the final navigation so the SameSite=Strict
+    # session cookie is sent (a redirect chain started by Google would drop it).
+    response = Response(
+        '<!doctype html><meta charset="utf-8"><title>CyberCheck</title>'
+        '<script>window.location.replace("/")</script>'
+        '<noscript><a href="/">Continuar</a></noscript>',
+        media_type="text/html",
+    )
+    _set_session_cookie(response, username, epoch)
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    return response
 
 
 @app.get("/api/users")
 def list_users(request: Request) -> dict[str, Any]:
     _require_user(request, "admin")
+    company_id = _company_id(request)
     with connect() as db:
         rows = db.execute(
-            "SELECT id, username, role, active, last_login_at, created_at, updated_at FROM users ORDER BY username"
+            """
+            SELECT id, username, role, active, last_login_at, created_at, updated_at
+            FROM users WHERE company_id=? ORDER BY username
+            """,
+            (company_id,),
         ).fetchall()
+    user = _session_user(request) or {}
     return {
-        "bootstrap_admin": _admin_username(),
+        "bootstrap_admin": _admin_username() if user.get("bootstrap") else None,
         "users": [public_user(row) for row in rows],
         "roles": ROLE_LABELS,
     }
@@ -538,6 +807,7 @@ def list_users(request: Request) -> dict[str, Any]:
 @app.post("/api/users")
 def create_user(payload: UserCreateRequest, request: Request) -> dict[str, Any]:
     actor = _require_user(request, "admin")
+    company_id = _company_id(request)
     try:
         username = validate_username(payload.username)
         role = validate_role(payload.role)
@@ -551,11 +821,11 @@ def create_user(payload: UserCreateRequest, request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail="El usuario ya existe")
         user_id = insert_returning_id(
             db,
-            "INSERT INTO users(username, role, password_hash) VALUES (?, ?, ?)",
-            (username, role, hash_password(payload.password)),
+            "INSERT INTO users(company_id, username, role, password_hash) VALUES (?, ?, ?, ?)",
+            (company_id, username, role, hash_password(payload.password)),
         )
         audit(db, actor, "user.create", target_type="user", target_id=username,
-              details={"role": role}, source=_client_hash(request))
+              details={"role": role}, source=_client_hash(request), company_id=company_id)
         row = db.execute(
             "SELECT id, username, role, active, last_login_at, created_at, updated_at FROM users WHERE id=?",
             (user_id,),
@@ -566,6 +836,7 @@ def create_user(payload: UserCreateRequest, request: Request) -> dict[str, Any]:
 @app.patch("/api/users/{user_id}")
 def update_user(user_id: int, payload: UserUpdateRequest, request: Request) -> dict[str, Any]:
     actor = _require_user(request, "admin")
+    company_id = _company_id(request)
     changes: dict[str, Any] = {}
     try:
         if payload.role is not None:
@@ -579,7 +850,9 @@ def update_user(user_id: int, payload: UserUpdateRequest, request: Request) -> d
     if not changes and payload.password is None:
         raise HTTPException(status_code=400, detail="No hay cambios")
     with connect() as db:
-        row = db.execute("SELECT id, username FROM users WHERE id=?", (user_id,)).fetchone()
+        row = db.execute(
+            "SELECT id, username FROM users WHERE id=? AND company_id=?", (user_id, company_id)
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Usuario no existe")
         if row["username"] == actor and (changes.get("active") is False or changes.get("role", "admin") != "admin"):
@@ -593,7 +866,8 @@ def update_user(user_id: int, payload: UserUpdateRequest, request: Request) -> d
         assignments += ["session_epoch=session_epoch+1", "updated_at=CURRENT_TIMESTAMP"]
         db.execute(f"UPDATE users SET {', '.join(assignments)} WHERE id=?", (*values, user_id))
         audit(db, actor, "user.update", target_type="user", target_id=row["username"],
-              details={**changes, "password_changed": payload.password is not None}, source=_client_hash(request))
+              details={**changes, "password_changed": payload.password is not None},
+              source=_client_hash(request), company_id=company_id)
         updated = db.execute(
             "SELECT id, username, role, active, last_login_at, created_at, updated_at FROM users WHERE id=?",
             (user_id,),
@@ -604,15 +878,108 @@ def update_user(user_id: int, payload: UserUpdateRequest, request: Request) -> d
 @app.get("/api/audit")
 def audit_log(request: Request, limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
     _require_user(request, "admin")
+    company_id = _company_id(request)
     with connect() as db:
         rows = db.execute(
             """
             SELECT id, actor, action, target_type, target_id, details_json, created_at
-            FROM admin_audit_log ORDER BY id DESC LIMIT ?
+            FROM admin_audit_log WHERE company_id=? ORDER BY id DESC LIMIT ?
             """,
-            (limit,),
+            (company_id, limit),
         ).fetchall()
     return {"events": [{**dict(row), "details": json_loads(row["details_json"])} for row in rows]}
+
+
+# --- Agent enrollment ---------------------------------------------------------------
+
+def _issue_enrollment_token(db: Any, company_id: int, actor: str) -> str:
+    """Short-lived, company-bound secret embedded in a downloaded installer."""
+    token = secrets.token_hex(16)
+    expires = _db_time(db, datetime.now(timezone.utc) + timedelta(days=ENROLLMENT_TOKEN_DAYS))
+    db.execute(
+        "INSERT INTO enrollment_tokens(company_id, token_hash, created_by, expires_at) VALUES (?, ?, ?, ?)",
+        (company_id, hash_agent_token(token), actor, expires),
+    )
+    return token
+
+
+def _enrollment_company(db: Any, code: str) -> int | None:
+    """Company for a registration code: an enrollment token or the global code."""
+    row = db.execute(
+        """
+        SELECT id, company_id FROM enrollment_tokens
+        WHERE token_hash=? AND revoked=0 AND expires_at > ?
+        """,
+        (hash_agent_token(code.strip()), _db_time(db, datetime.now(timezone.utc))),
+    ).fetchone()
+    if row:
+        db.execute("UPDATE enrollment_tokens SET uses=uses+1 WHERE id=?", (row["id"],))
+        return int(row["company_id"])
+    if hmac.compare_digest(code.strip(), _registration_code().strip()):
+        # The global code is the bootstrap tenant's; it never picks a company
+        # by name, so it cannot be used to plant devices in another account.
+        return _default_company_id(db)
+    return None
+
+
+def _installer_file() -> Path:
+    """Local copy of the generic installer, downloaded and cached on demand."""
+    local = os.getenv("AGENT_INSTALLER_PATH")
+    if local and Path(local).is_file():
+        return Path(local)
+    url = os.getenv("AGENT_INSTALLER_URL", DEFAULT_INSTALLER_URL)
+    cache = Path(tempfile.gettempdir()) / "cybercheck-installer" / "CyberCheckSetup.exe"
+    if cache.is_file() and time.time() - cache.stat().st_mtime < INSTALLER_CACHE_SECONDS:
+        return cache
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    partial = cache.with_suffix(".part")
+    digest = hashlib.sha256()
+    with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
+        response.raise_for_status()
+        with partial.open("wb") as handle:
+            for chunk in response.iter_bytes():
+                digest.update(chunk)
+                handle.write(chunk)
+    expected = os.getenv("AGENT_INSTALLER_SHA256", "").strip().lower()
+    if expected and not hmac.compare_digest(digest.hexdigest(), expected):
+        partial.unlink(missing_ok=True)
+        raise RuntimeError("El instalador descargado no coincide con AGENT_INSTALLER_SHA256")
+    os.replace(partial, cache)
+    return cache
+
+
+@app.get("/api/agent/installer")
+def download_installer(request: Request) -> Response:
+    actor = _require_user(request, "technician")
+    company_id = _company_id(request)
+    try:
+        installer = _installer_file()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="El instalador no esta disponible en este momento") from exc
+    with connect() as db:
+        token = _issue_enrollment_token(db, company_id, actor)
+        audit(db, actor, "installer.download", target_type="company", target_id=company_id,
+              source=_client_hash(request), company_id=company_id)
+    # The installer reads the enrollment token from its own file name.
+    return FileResponse(
+        installer,
+        media_type="application/vnd.microsoft.portable-executable",
+        filename=f"CyberCheckSetup_{token}.exe",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/agent/installer/revoke")
+def revoke_installers(request: Request) -> dict[str, Any]:
+    actor = _require_user(request, "admin")
+    company_id = _company_id(request)
+    with connect() as db:
+        revoked = db.execute(
+            "UPDATE enrollment_tokens SET revoked=1 WHERE company_id=? AND revoked=0", (company_id,)
+        ).rowcount
+        audit(db, actor, "installer.revoke", target_type="company", target_id=company_id,
+              details={"revoked": revoked}, source=_client_hash(request), company_id=company_id)
+    return {"revoked": revoked}
 
 
 @app.post("/api/register")
@@ -620,13 +987,10 @@ def register(payload: RegisterRequest, request: Request) -> dict[str, Any]:
     if _production_mode():
         validate_security_config()
     _check_registration_limit(request)
-    if not hmac.compare_digest(payload.registration_code, _registration_code()):
-        raise HTTPException(status_code=403, detail="Codigo de registro invalido")
     with connect() as db:
-        company = db.execute("SELECT id FROM companies WHERE name = ?", (payload.company_name,)).fetchone()
-        company_id = company["id"] if company else insert_returning_id(
-            db, "INSERT INTO companies(name) VALUES (?)", (payload.company_name,)
-        )
+        company_id = _enrollment_company(db, payload.registration_code)
+        if company_id is None:
+            raise HTTPException(status_code=403, detail="Codigo de registro invalido")
         device_id = generate_device_id()
         token = generate_token()
         stored_token = hash_agent_token(token)
@@ -654,8 +1018,7 @@ def register(payload: RegisterRequest, request: Request) -> dict[str, Any]:
             (device_id, stored_token),
         )
         audit(db, f"agent:{device_id}", "device.register", target_type="device", target_id=device_id,
-              details={"hostname": payload.hostname, "company": payload.company_name},
-              source=_client_hash(request))
+              details={"hostname": payload.hostname}, source=_client_hash(request), company_id=company_id)
         return {"device_id": device_id, "token": token, "hostname": payload.hostname}
 
 
@@ -909,12 +1272,11 @@ def agent_tasks(
 @app.post("/api/tasks")
 def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
     actor = _require_user(request, "technician")
+    company_id = _company_id(request)
     if payload.task_type not in ALLOWED_TASKS:
         raise HTTPException(status_code=400, detail="Tipo de tarea no permitido")
     with connect() as db:
-        device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (payload.device_id,)).fetchone()
-        if not device:
-            raise HTTPException(status_code=404, detail="Equipo no existe")
+        _company_device(db, payload.device_id, company_id)
         existing = db.execute(
             """
             SELECT id, status FROM tasks
@@ -931,7 +1293,8 @@ def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
             (payload.device_id, payload.task_type, json_dumps(payload.parameters)),
         )
         audit(db, actor, "task.create", target_type="device", target_id=payload.device_id,
-              details={"task_id": task_id, "task_type": payload.task_type}, source=_client_hash(request))
+              details={"task_id": task_id, "task_type": payload.task_type},
+              source=_client_hash(request), company_id=company_id)
         return {"task_id": task_id, "status": "pending", "deduplicated": False}
 
 
@@ -939,10 +1302,7 @@ def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
 def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
     _require_user(request, "technician")
     with connect() as db:
-        device = db.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
-        if not device:
-            raise HTTPException(status_code=404, detail="Equipo no existe")
-        view = device_view(dict(device))
+        view = device_view(_company_device(db, device_id, _company_id(request)))
     return {
         "device_id": device_id,
         "agent_status": view["agent_status"],
@@ -962,15 +1322,15 @@ def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
 @app.post("/api/devices/{device_id}/rotate-credential")
 def request_credential_rotation(device_id: str, request: Request) -> dict[str, Any]:
     actor = _require_user(request, "admin")
+    company_id = _company_id(request)
     with connect() as db:
-        updated = db.execute(
+        _company_device(db, device_id, company_id)
+        db.execute(
             "UPDATE devices SET credential_rotation_requested=? WHERE device_id=?",
             (True, device_id),
         )
-        if not updated.rowcount:
-            raise HTTPException(status_code=404, detail="Equipo no existe")
         audit(db, actor, "device.rotation_requested", target_type="device", target_id=device_id,
-              source=_client_hash(request))
+              source=_client_hash(request), company_id=company_id)
     return {
         "device_id": device_id,
         "status": "rotation_requested",
@@ -981,17 +1341,16 @@ def request_credential_rotation(device_id: str, request: Request) -> dict[str, A
 @app.post("/api/devices/{device_id}/disconnect")
 def disconnect_device(device_id: str, request: Request) -> dict[str, Any]:
     actor = _require_user(request, "admin")
+    company_id = _company_id(request)
     with connect() as db:
-        device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,)).fetchone()
-        if not device:
-            raise HTTPException(status_code=404, detail="Equipo no existe")
+        _company_device(db, device_id, company_id)
         db.execute("UPDATE agent_credentials SET active=? WHERE device_id=?", (False, device_id))
         db.execute(
             "UPDATE tasks SET status='canceled', completed_at=CURRENT_TIMESTAMP WHERE device_id=? AND status IN ('pending', 'delivered')",
             (device_id,),
         )
         audit(db, actor, "device.disconnect", target_type="device", target_id=device_id,
-              source=_client_hash(request))
+              source=_client_hash(request), company_id=company_id)
     return {
         "device_id": device_id,
         "status": "disconnected",
@@ -1002,10 +1361,9 @@ def disconnect_device(device_id: str, request: Request) -> dict[str, Any]:
 @app.post("/api/devices/{device_id}/reactivate")
 def reactivate_device(device_id: str, request: Request) -> dict[str, Any]:
     actor = _require_user(request, "admin")
+    company_id = _company_id(request)
     with connect() as db:
-        device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,)).fetchone()
-        if not device:
-            raise HTTPException(status_code=404, detail="Equipo no existe")
+        _company_device(db, device_id, company_id)
         # Only the newest credential comes back; tokens superseded by a
         # rotation must stay retired.
         db.execute(
@@ -1016,7 +1374,7 @@ def reactivate_device(device_id: str, request: Request) -> dict[str, Any]:
             (True, device_id),
         )
         audit(db, actor, "device.reactivate", target_type="device", target_id=device_id,
-              source=_client_hash(request))
+              source=_client_hash(request), company_id=company_id)
     return {
         "device_id": device_id,
         "status": "active",
@@ -1033,9 +1391,9 @@ def device_detail(device_id: str, request: Request) -> dict[str, Any]:
             SELECT d.*,
                 EXISTS(SELECT 1 FROM agent_credentials c WHERE c.device_id=d.device_id AND c.active=?) AS credential_active
             FROM devices d
-            WHERE d.device_id = ?
+            WHERE d.device_id = ? AND d.company_id = ?
             """,
-            (True, device_id),
+            (True, device_id, _company_id(request)),
         ).fetchone()
         if not device:
             raise HTTPException(status_code=404, detail="Equipo no existe")
@@ -1166,9 +1524,12 @@ def health_ready() -> Response:
 @app.get("/api/dashboard")
 def dashboard(request: Request) -> dict[str, Any]:
     _require_user(request)
+    company_id = _company_id(request)
+    scope = (company_id,)
+    in_company = "device_id IN (SELECT device_id FROM devices WHERE company_id=?)"
     with connect() as db:
         evidences = [dict(row) for row in db.execute(
-            """
+            f"""
             SELECT * FROM (
                 SELECT e.*,
                     ROW_NUMBER() OVER (
@@ -1176,11 +1537,13 @@ def dashboard(request: Request) -> dict[str, Any]:
                         ORDER BY e.created_at DESC, e.id DESC
                     ) AS evidence_rank
                 FROM evidences e
+                WHERE e.{in_company}
             ) latest
             WHERE evidence_rank=1
             ORDER BY created_at DESC, id DESC
             LIMIT 2000
-            """
+            """,
+            scope,
         )]
         for evidence in evidences:
             evidence.pop("evidence_rank", None)
@@ -1189,19 +1552,32 @@ def dashboard(request: Request) -> dict[str, Any]:
             SELECT d.*,
                 EXISTS(SELECT 1 FROM agent_credentials c WHERE c.device_id=d.device_id AND c.active=?) AS credential_active
             FROM devices d
+            WHERE d.company_id=?
             ORDER BY last_seen DESC NULLS LAST
             """,
-            (True,),
+            (True, company_id),
         )]
-        findings = [dict(row) for row in db.execute("SELECT * FROM findings ORDER BY updated_at DESC")]
+        findings = [dict(row) for row in db.execute(
+            f"SELECT * FROM findings WHERE {in_company} ORDER BY updated_at DESC", scope
+        )]
         open_findings = [finding for finding in findings if finding["status"] != "resolved"]
         return {
             "devices": devices,
             "findings": findings,
             "evidences": evidences,
-            "scans": [dict(row) for row in db.execute("SELECT * FROM scans ORDER BY created_at DESC LIMIT 20")],
-            "tasks": [dict(row) for row in db.execute("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 20")],
-            "history": [dict(row) for row in db.execute("SELECT * FROM history ORDER BY created_at DESC LIMIT 40")],
+            "scans": [dict(row) for row in db.execute(
+                f"SELECT * FROM scans WHERE {in_company} ORDER BY created_at DESC LIMIT 20", scope
+            )],
+            "tasks": [dict(row) for row in db.execute(
+                f"SELECT * FROM tasks WHERE {in_company} ORDER BY created_at DESC LIMIT 20", scope
+            )],
+            "history": [dict(row) for row in db.execute(
+                f"""
+                SELECT * FROM history WHERE finding_id IN (SELECT id FROM findings WHERE {in_company})
+                ORDER BY created_at DESC LIMIT 40
+                """,
+                scope,
+            )],
             "summary": {
                 "devices": len(devices),
                 "online_devices": len([device for device in devices if device["agent_status"] == "online"]),
@@ -1218,20 +1594,21 @@ def dashboard(request: Request) -> dict[str, Any]:
 def ai_company_summary(request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
-        return company_ai_summary(db)
+        return company_ai_summary(db, _company_id(request))
 
 
 @app.post("/api/ai/company-chat")
 def ai_company_chat(payload: AiChatRequest, request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
-        return answer_company_question(db, payload.question)
+        return answer_company_question(db, _company_id(request), payload.question)
 
 
 @app.get("/api/devices/{device_id}/ai-summary")
 def ai_device_summary(device_id: str, request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
+        _company_device(db, device_id, _company_id(request))
         return device_ai_summary(db, device_id)
 
 
@@ -1239,6 +1616,7 @@ def ai_device_summary(device_id: str, request: Request) -> dict[str, Any]:
 def ai_device_chat(device_id: str, payload: AiChatRequest, request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
+        _company_device(db, device_id, _company_id(request))
         return answer_device_question(db, device_id, payload.question)
 
 

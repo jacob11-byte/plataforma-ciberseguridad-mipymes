@@ -134,17 +134,49 @@ powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1
 El instalador usa `pythonw.exe`, oculta la tarea y evita instancias paralelas.
 No combines este modo con el servicio empresarial.
 
-### Instalador de doble clic (recomendado)
+### Cuentas y agregar computadoras desde el panel (recomendado)
+
+Cualquier persona crea su cuenta en `/login` (pestana **Crear cuenta**, con
+correo y contrasena, o **Continuar con Google**). Cada cuenta es una empresa
+aislada: sus usuarios solo ven sus propias computadoras, hallazgos y auditoria.
+
+Para proteger una computadora, en el panel se pulsa **+ Agregar computadora**.
+Se descarga `CyberCheckSetup_<token>.exe`, donde `<token>` es un codigo de
+inscripcion de 30 dias atado a esa empresa. Al abrirlo en el equipo (doble
+clic, aceptar el permiso de administrador) el agente se instala, se registra en
+esa cuenta y el panel avisa "Computadora conectada". Los administradores pueden
+invalidar todos los instaladores descargados con `POST /api/agent/installer/revoke`.
+
+El servidor sirve el instalador generico publicado en GitHub Releases
+(`AGENT_INSTALLER_URL`, por defecto la ultima release de este repositorio) y lo
+guarda en cache una hora. Opcionalmente `AGENT_INSTALLER_SHA256` verifica su hash.
+
+Variables para el inicio con Google (opcional; sin ellas el boton no aparece):
+
+```text
+GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=...
+PUBLIC_BASE_URL=https://plataforma-ciberseguridad-mipymes.onrender.com
+```
+
+En Google Cloud Console > APIs y servicios > Credenciales, crea un "ID de
+cliente de OAuth" de tipo Aplicacion web con la URI de redireccion
+`https://<tu-dominio>/auth/google/callback`. `SIGNUP_ENABLED=false` desactiva
+la creacion de cuentas nuevas.
+
+El administrador de `ADMIN_USERNAME` y los agentes registrados con
+`AGENT_REGISTRATION_CODE` pertenecen a la empresa `DEFAULT_COMPANY_NAME`
+(por defecto `MIPYME Principal`).
+
+### Compilar y publicar el instalador generico
 
 `CyberCheckSetup.exe` instala el agente en cualquier PC o VM Windows sin
-escribir comandos: se copia al equipo, se abre con doble clic, Windows pide
-permiso de administrador una vez y el equipo queda registrado y vigilado.
+escribir comandos. El generico no lleva credenciales: la cuenta la aporta el
+token del nombre del archivo descargado desde el panel.
 
-Generarlo (una sola vez, en el equipo de desarrollo):
-
-1. Copia `agent/enrollment.example.json` a `agent/enrollment.json` y pon en
-   `registration_code` el mismo valor que `AGENT_REGISTRATION_CODE` en Render.
-   Ese archivo esta en `.gitignore` y nunca debe contener `device_id` ni `token`.
+1. Copia `agent/enrollment.example.json` a `agent/enrollment.json` (solo
+   `api_url` y valores por defecto; nunca `device_id`, `token` ni, para la
+   version publica, `registration_code`).
 2. Compila:
 
 ```powershell
@@ -152,7 +184,14 @@ Generarlo (una sola vez, en el equipo de desarrollo):
 powershell -ExecutionPolicy Bypass -File agent/build_standalone.ps1 -PythonExe .venv\Scripts\python.exe
 ```
 
-El resultado es `dist\CyberCheckSetup.exe`. Al ejecutarlo:
+El resultado es `dist\CyberCheckSetup.exe`. Publicalo como asset de una release
+para que el panel lo entregue:
+
+```powershell
+gh release create agent-v0.6.0 dist\CyberCheckSetup.exe --title "Agente 0.6.0" --notes "Instalador generico"
+```
+
+Al ejecutarlo:
 
 - detiene y reemplaza versiones anteriores y elimina tareas programadas heredadas;
 - repara permisos de instalaciones previas en `ProgramData\CyberCheck`;

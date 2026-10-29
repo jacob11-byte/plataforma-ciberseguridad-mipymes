@@ -11,6 +11,7 @@ import ctypes
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -79,7 +80,19 @@ def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProces
 
 # --- Enrollment and configuration -------------------------------------------------
 
-def load_enrollment(path: Path) -> dict[str, Any]:
+ENROLLMENT_NAME = re.compile(r"CyberCheckSetup_([0-9a-f]{32})", re.IGNORECASE)
+
+
+def enrollment_token_from_name(name: str) -> str | None:
+    """Token the panel embeds in the download name: CyberCheckSetup_<token>.exe.
+
+    Browsers may append " (1)" to repeated downloads; the pattern ignores it.
+    """
+    match = ENROLLMENT_NAME.search(name)
+    return match.group(1).lower() if match else None
+
+
+def load_enrollment(path: Path, token: str | None = None) -> dict[str, Any]:
     try:
         enrollment = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -90,6 +103,13 @@ def load_enrollment(path: Path) -> dict[str, Any]:
         # A device token baked into an installer would make every computer
         # impersonate the same device.
         raise SetupError("La configuracion de registro no debe contener device_id ni token")
+    if token:
+        enrollment["registration_code"] = token
+    if not enrollment.get("registration_code"):
+        raise SetupError(
+            "Este instalador no esta vinculado a ninguna cuenta. Descargalo desde el panel con el boton "
+            "'Agregar computadora' y no cambies el nombre del archivo."
+        )
     try:
         validate_agent_config(enrollment)
     except ValueError as exc:
@@ -314,7 +334,9 @@ def launch_tray_for_current_user(program_dir: Path) -> None:
 
 def install(payload: Path) -> str:
     program_dir, data_dir = install_root(), data_root()
-    enrollment = load_enrollment(payload / "enrollment.json")
+    enrollment = load_enrollment(
+        payload / "enrollment.json", enrollment_token_from_name(Path(sys.executable).name)
+    )
     LOGGER.info("Instalando %s %s", PRODUCT_NAME, AGENT_VERSION)
 
     stop_components()

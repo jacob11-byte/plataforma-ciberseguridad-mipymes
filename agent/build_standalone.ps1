@@ -59,8 +59,11 @@ try {
     if ($enrollment.token -or $enrollment.device_id) {
         throw "$EnrollmentConfig no debe contener device_id ni token: todos los equipos compartirian identidad."
     }
-    if (-not $enrollment.registration_code -or -not $enrollment.api_url) {
-        throw "$EnrollmentConfig requiere api_url y registration_code."
+    if (-not $enrollment.api_url) {
+        throw "$EnrollmentConfig requiere api_url."
+    }
+    if ($enrollment.registration_code) {
+        Write-Warning "El instalador incluira registration_code: no lo publiques. Sin ese campo, cada descarga desde el panel lleva su propio token."
     }
     # PyInstaller --add-data takes a destination folder, so stage the file
     # under the fixed name the installer looks for.
