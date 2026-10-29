@@ -2,16 +2,23 @@ import { escapeHtml } from "./utils.js";
 import { taskLabels, taskLabel, statusLabel } from "./labels.js";
 import { latestStatusEvidence, renderSecurityStatus } from "./securityStatus.js";
 import { findingCard, latestEvidenceByDeviceAndControl } from "./findings.js";
+import { can, roleLabels } from "./roles.js";
 
-export const dashboardModules = [
-  ["computadoras", "Computadoras"],
-  ["analista", "Analista de evidencia"],
-  ["estado", "Estado"],
-  ["problemas", "Problemas"],
-  ["revisiones", "Revisiones"],
-  ["historial", "Historial"],
-  ["tareas", "Tareas"],
+const allModules = [
+  ["computadoras", "Computadoras", "viewer"],
+  ["analista", "Analista de evidencia", "viewer"],
+  ["estado", "Estado", "viewer"],
+  ["problemas", "Problemas", "viewer"],
+  ["revisiones", "Revisiones", "viewer"],
+  ["historial", "Historial", "viewer"],
+  ["tareas", "Tareas", "viewer"],
+  ["usuarios", "Usuarios", "admin"],
+  ["auditoria", "Auditoria", "admin"],
 ];
+
+export function dashboardModules(user) {
+  return allModules.filter(([, , role]) => can(user, role)).map(([id, label]) => [id, label]);
+}
 
 const renderers = {
   computadoras: renderDevicesModule,
@@ -21,6 +28,8 @@ const renderers = {
   revisiones: renderScansModule,
   historial: renderHistoryModule,
   tareas: renderTasksModule,
+  usuarios: renderUsersModule,
+  auditoria: renderAuditModule,
 };
 
 export function renderModule(moduleId, state) {
@@ -32,13 +41,13 @@ function renderDevicesModule(state) {
   return `
     <div class="section-title">
       <h2>Computadoras</h2>
-      ${taskFormHtml(devices)}
+      ${can(state.user, "technician") ? taskFormHtml(devices) : ""}
     </div>
     <p class="empty-state" ${devices.length ? "hidden" : ""}>Aun no hay computadoras registradas. Instala el agente en una computadora para comenzar.</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Computadora</th><th>Sistema</th><th>Agente</th><th>Ultimo contacto</th><th>Accion</th></tr></thead>
-        <tbody>${devices.map(deviceRow).join("")}</tbody>
+        <tbody>${devices.map((device) => deviceRow(device, state.user)).join("")}</tbody>
       </table>
     </div>
     <div id="reconnectNotice" class="notice" hidden></div>
@@ -56,20 +65,28 @@ function taskFormHtml(devices) {
   `;
 }
 
-function deviceRow(device) {
+function deviceActions(device, user) {
+  const id = escapeHtml(device.device_id);
+  const actions = [];
+  if (can(user, "technician")) {
+    actions.push(`<button class="small secondary reconnect-btn" data-device-id="${id}">Reconectar</button>`);
+  }
+  if (can(user, "admin")) {
+    actions.push(`<button class="small secondary rotate-btn" data-device-id="${id}">Rotar credencial</button>`);
+    actions.push(`<button class="small secondary reactivate-btn" data-device-id="${id}">Reactivar</button>`);
+    actions.push(`<button class="small danger disconnect-btn" data-device-id="${id}">Desconectar</button>`);
+  }
+  return actions.length ? `<div class="row-actions">${actions.join("")}</div>` : `<span class="muted">Solo lectura</span>`;
+}
+
+function deviceRow(device, user) {
   return `
     <tr>
       <td><a class="device-link" href="/devices/${encodeURIComponent(device.device_id)}"><strong>${escapeHtml(device.name || device.hostname || device.device_id)}</strong></a><div class="muted">${escapeHtml(device.device_id)}</div></td>
       <td>${escapeHtml(device.windows_edition || device.os_version || "Sin dato")}<div class="muted">${escapeHtml(device.architecture || "")}</div></td>
       <td><span class="status ${device.agent_status}">${statusLabel(device.agent_status, device.agent_status_label || "Sin conexion")}</span><div class="muted">${escapeHtml(device.agent_version || "sin version")}</div></td>
       <td>${escapeHtml(device.last_seen || "Sin contacto")}</td>
-      <td>
-        <div class="row-actions">
-          <button class="small secondary reconnect-btn" data-device-id="${escapeHtml(device.device_id)}">Reconectar</button>
-          <button class="small secondary reactivate-btn" data-device-id="${escapeHtml(device.device_id)}">Reactivar</button>
-          <button class="small danger disconnect-btn" data-device-id="${escapeHtml(device.device_id)}">Desconectar</button>
-        </div>
-      </td>
+      <td>${deviceActions(device, user)}</td>
     </tr>
   `;
 }
@@ -165,4 +182,91 @@ function renderTasksModule(state) {
       <div class="muted">${escapeHtml(task.created_at)}</div>
     </div>
   `).join("") || `<p class="empty-state">Sin solicitudes enviadas.</p>`}</div>`;
+}
+
+function roleOptions(selected) {
+  return Object.entries(roleLabels).map(([value, label]) =>
+    `<option value="${value}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
+}
+
+function renderUsersModule(state) {
+  const data = state.users;
+  if (!data) return `<h2>Usuarios</h2><p class="empty-state">Cargando usuarios...</p>`;
+  const rows = data.users.map((user) => `
+    <tr>
+      <td><strong>${escapeHtml(user.username)}</strong><div class="muted">Ultimo acceso: ${escapeHtml(user.last_login_at || "nunca")}</div></td>
+      <td><select class="user-role" data-user-id="${user.id}" ${user.username === state.user.username ? "disabled" : ""}>${roleOptions(user.role)}</select></td>
+      <td><span class="badge ${user.active ? "ok" : "failed"}">${user.active ? "Activo" : "Desactivado"}</span></td>
+      <td>
+        <div class="row-actions">
+          <input type="password" class="user-password" data-user-id="${user.id}" placeholder="Nueva contrasena" autocomplete="new-password">
+          <button class="small secondary user-password-btn" data-user-id="${user.id}">Cambiar</button>
+          ${user.username === state.user.username ? "" : `<button class="small ${user.active ? "danger" : "secondary"} user-active-btn" data-user-id="${user.id}" data-active="${user.active ? "false" : "true"}">${user.active ? "Desactivar" : "Activar"}</button>`}
+        </div>
+      </td>
+    </tr>
+  `).join("");
+  return `
+    <div class="section-title">
+      <div>
+        <h2>Usuarios</h2>
+        <p>El administrador inicial <strong>${escapeHtml(data.bootstrap_admin)}</strong> se configura con variables de entorno.</p>
+      </div>
+      <form id="userForm">
+        <input id="newUsername" placeholder="usuario" autocomplete="off" required>
+        <input id="newPassword" type="password" placeholder="Contrasena (12+ caracteres)" autocomplete="new-password" required>
+        <select id="newRole">${roleOptions("viewer")}</select>
+        <button type="submit">Crear usuario</button>
+      </form>
+    </div>
+    <div id="userNotice" class="notice" hidden></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" class="empty-state">Aun no hay usuarios adicionales.</td></tr>`}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+const auditLabels = {
+  "login.success": "Inicio de sesion",
+  "login.failure": "Inicio de sesion fallido",
+  logout: "Cierre de sesion",
+  "task.create": "Revision solicitada",
+  "device.register": "Equipo registrado",
+  "device.disconnect": "Equipo desconectado",
+  "device.reactivate": "Equipo reactivado",
+  "device.rotation_requested": "Rotacion de credencial solicitada",
+  "device.credential_rotated": "Credencial del agente renovada",
+  "user.create": "Usuario creado",
+  "user.update": "Usuario modificado",
+};
+
+function renderAuditModule(state) {
+  const events = state.audit;
+  if (!events) return `<h2>Auditoria</h2><p class="empty-state">Cargando eventos...</p>`;
+  const rows = events.map((event) => `
+    <tr>
+      <td>${escapeHtml(event.created_at)}</td>
+      <td>${escapeHtml(event.actor)}</td>
+      <td><span class="badge ${event.action === "login.failure" ? "failed" : "ok"}">${escapeHtml(auditLabels[event.action] || event.action)}</span></td>
+      <td>${escapeHtml([event.target_type, event.target_id].filter(Boolean).join(": "))}</td>
+      <td class="muted">${escapeHtml(Object.keys(event.details || {}).length ? JSON.stringify(event.details) : "")}</td>
+    </tr>
+  `).join("");
+  return `
+    <div class="section-title">
+      <div>
+        <h2>Auditoria</h2>
+        <p>Acciones administrativas y de agentes, de la mas reciente a la mas antigua.</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Fecha</th><th>Actor</th><th>Accion</th><th>Objetivo</th><th>Detalle</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5" class="empty-state">Sin eventos registrados.</td></tr>`}</tbody>
+      </table>
+    </div>
+  `;
 }

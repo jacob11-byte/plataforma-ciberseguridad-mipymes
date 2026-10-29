@@ -22,8 +22,13 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id INTEGER REFERENCES companies(id),
     username TEXT NOT NULL UNIQUE,
-    role TEXT NOT NULL DEFAULT 'admin',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    role TEXT NOT NULL DEFAULT 'viewer',
+    password_hash TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    session_epoch INTEGER NOT NULL DEFAULT 0,
+    last_login_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS devices (
     device_id TEXT PRIMARY KEY,
@@ -46,7 +51,8 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
     token TEXT NOT NULL UNIQUE,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_used_at TEXT
+    last_used_at TEXT,
+    expires_at TEXT
 );
 CREATE TABLE IF NOT EXISTS scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +181,7 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
     target_type TEXT,
     target_id TEXT,
     details_json TEXT NOT NULL DEFAULT '{}',
+    source_hash TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS registration_rate_limits (
@@ -197,6 +204,8 @@ POSTGRES_SCHEMA = (
     .replace("last_seen TEXT", "last_seen TIMESTAMPTZ")
     .replace("delivered_at TEXT", "delivered_at TIMESTAMPTZ")
     .replace("completed_at TEXT", "completed_at TIMESTAMPTZ")
+    .replace("last_login_at TEXT", "last_login_at TIMESTAMPTZ")
+    .replace("expires_at TEXT", "expires_at TIMESTAMPTZ")
 )
 
 
@@ -319,6 +328,29 @@ def migrate_db(db: Database) -> None:
         if name not in task_columns:
             db.execute(f"ALTER TABLE tasks ADD COLUMN {name} {column_type}")
 
+    timestamp_type = "TIMESTAMPTZ" if db.is_postgres else "TEXT"
+    bool_true = "BOOLEAN NOT NULL DEFAULT TRUE" if db.is_postgres else "INTEGER NOT NULL DEFAULT 1"
+    bool_false = "BOOLEAN NOT NULL DEFAULT FALSE" if db.is_postgres else "INTEGER NOT NULL DEFAULT 0"
+    added_columns = {
+        "users": {
+            "password_hash": "TEXT",
+            "active": bool_true,
+            "session_epoch": "INTEGER NOT NULL DEFAULT 0",
+            "last_login_at": timestamp_type,
+            "updated_at": f"{timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            if db.is_postgres else "TEXT",
+        },
+        "agent_credentials": {"expires_at": timestamp_type},
+        "admin_audit_log": {"source_hash": "TEXT"},
+        "devices": {"credential_rotation_requested": bool_false},
+    }
+    for table, columns_to_add in added_columns.items():
+        existing_columns = set(table_columns(db, table))
+        for name, column_type in columns_to_add.items():
+            if name not in existing_columns:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
+
+    db.execute("CREATE INDEX IF NOT EXISTS idx_audit_created ON admin_audit_log(created_at)")
     db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_scans_device_request "
         "ON scans(device_id, request_id) WHERE request_id IS NOT NULL"

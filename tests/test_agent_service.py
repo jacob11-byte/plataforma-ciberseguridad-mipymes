@@ -89,7 +89,64 @@ class AgentOutboxTest(unittest.TestCase):
         self.assertEqual(request.call_args.args[0], "GET")
 
 
+class AgentCredentialRotationTest(unittest.TestCase):
+    def test_rotation_persists_new_token_without_runtime_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "agent.json"
+            config = {
+                "api_url": "https://server.example",
+                "device_id": "device-1",
+                "token": "old-token",
+                "_config_path": str(config_path),
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with mock.patch.object(windows_agent, "request_json", return_value={"token": "n" * 43}):
+                self.assertTrue(windows_agent.rotate_credential(config))
+            stored = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(config["token"], "n" * 43)
+        self.assertEqual(stored["token"], "n" * 43)
+        self.assertNotIn("_config_path", stored)
+
+    def test_failed_write_keeps_old_token(self):
+        config = {
+            "api_url": "https://server.example",
+            "device_id": "device-1",
+            "token": "old-token",
+            "_config_path": "unused.json",
+        }
+        with mock.patch.object(windows_agent, "request_json", return_value={"token": "n" * 43}), \
+             mock.patch.object(windows_agent, "write_agent_config", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                windows_agent.rotate_credential(config)
+        self.assertEqual(config["token"], "old-token")
+
+    def test_poll_rotates_when_heartbeat_requests_it(self):
+        config = {"api_url": "https://server.example", "device_id": "device-1", "token": "secret"}
+        with mock.patch.object(windows_agent, "flush_outbox", return_value={"sent": 0, "pending": 0, "dead": 0}), \
+             mock.patch.object(windows_agent, "send_heartbeat", return_value={"rotate_credential": True}), \
+             mock.patch.object(windows_agent, "rotate_credential") as rotate, \
+             mock.patch.object(windows_agent, "request_json", return_value={"tasks": []}):
+            windows_agent.poll_once(config)
+        rotate.assert_called_once_with(config)
+
+
 class AgentServiceTest(unittest.TestCase):
+    def test_revoked_device_is_reported_distinctly(self):
+        config = {
+            "api_url": "https://server.example",
+            "device_id": "device-1",
+            "token": "top-secret",
+            "_config_path": "agent.json",
+        }
+        forbidden = urllib.error.HTTPError("https://server.example", 403, "Forbidden", {}, None)
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.dict(os.environ, {"CYBERCHECK_DATA_DIR": directory}), \
+             mock.patch("agent.windows_service.ensure_registered"), \
+             mock.patch("agent.windows_service.poll_once", side_effect=forbidden):
+            status = run_agent_cycle(config)
+        self.assertEqual(status["connectivity"], "revoked")
+        self.assertIn("desconectado", status_summary(status))
+
     def test_service_cycle_writes_sanitized_public_status(self):
         config = {
             "api_url": "https://server.example",

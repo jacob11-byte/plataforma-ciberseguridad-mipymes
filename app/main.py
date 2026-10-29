@@ -18,6 +18,18 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
+from .accounts import (
+    ROLE_LABELS,
+    audit,
+    burn_password_check,
+    hash_password,
+    public_user,
+    role_allows,
+    validate_password,
+    validate_role,
+    validate_username,
+    verify_password,
+)
 from .ai_service import answer_company_question, answer_device_question, company_ai_summary, device_ai_summary
 from .rules import evaluate_rules
 from .storage import connect, generate_device_id, generate_token, hash_agent_token, init_db, insert_returning_id, json_dumps
@@ -68,6 +80,8 @@ REGISTRATION_ATTEMPT_LIMIT = 20
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_ATTEMPT_LIMIT = 10
 TASK_LEASE_SECONDS = 45 * 60
+CREDENTIAL_MAX_AGE_DAYS = int(os.getenv("AGENT_CREDENTIAL_MAX_AGE_DAYS", "90"))
+CREDENTIAL_GRACE_SECONDS = 24 * 60 * 60
 _DEV_SESSION_SECRET = secrets.token_urlsafe(48)
 
 app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
@@ -115,6 +129,22 @@ class LoginRequest(BaseModel):
 
 class AiChatRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
+
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+    role: str = "viewer"
+
+
+class UserUpdateRequest(BaseModel):
+    role: str | None = None
+    active: bool | None = None
+    password: str | None = Field(default=None, max_length=256)
+
+
+class CredentialRotationRequest(BaseModel):
+    device_id: str
 
 
 @app.on_event("startup")
@@ -178,15 +208,24 @@ def _sign(value: str) -> str:
     return base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
 
 
-def _create_session(username: str) -> str:
+def _create_session(username: str, epoch: int = 0) -> str:
     expires = str(int(time.time()) + SESSION_MAX_AGE)
     nonce = secrets.token_urlsafe(12)
-    payload = f"{username}|{expires}|{nonce}"
+    payload = f"{username}|{expires}|{nonce}|{epoch}"
     token = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
     return f"{token}.{_sign(token)}"
 
 
-def _read_session(request: Request) -> str | None:
+def _session_user(request: Request) -> dict[str, Any] | None:
+    """Return the signed-in user with its current role, or None.
+
+    The role is read from the database on every request so that disabling a
+    user or changing its role takes effect immediately; ``session_epoch``
+    invalidates cookies issued before a password or role change.
+    """
+    cached = getattr(request.state, "user", None)
+    if cached:
+        return cached
     cookie = request.cookies.get(SESSION_COOKIE)
     if not cookie or "." not in cookie:
         return None
@@ -196,13 +235,41 @@ def _read_session(request: Request) -> str | None:
     padded = token + "=" * (-len(token) % 4)
     try:
         payload = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
-        username, expires, _nonce = payload.split("|", 2)
+        username, expires, _nonce, epoch = payload.split("|", 3)
         expiry = int(expires)
+        session_epoch = int(epoch)
     except (ValueError, UnicodeDecodeError, binascii.Error, OverflowError):
         return None
-    if expiry < int(time.time()) or username != _admin_username():
+    if expiry < int(time.time()):
         return None
-    return username
+    if hmac.compare_digest(username, _admin_username()):
+        user = {"username": username, "role": "admin", "bootstrap": True}
+    else:
+        with connect() as db:
+            row = db.execute(
+                "SELECT username, role, active, session_epoch FROM users WHERE username=?",
+                (username,),
+            ).fetchone()
+        if not row or row["active"] in {False, 0, "0"} or int(row["session_epoch"]) != session_epoch:
+            return None
+        user = {"username": row["username"], "role": row["role"], "bootstrap": False}
+    request.state.user = user
+    return user
+
+
+def _read_session(request: Request) -> str | None:
+    user = _session_user(request)
+    return user["username"] if user else None
+
+
+def _client_hash(request: Request) -> str:
+    client_host = request.client.host if request.client else "unknown"
+    return hashlib.sha256(client_host.encode("utf-8")).hexdigest()[:16]
+
+
+def _actor(request: Request) -> str:
+    user = _session_user(request)
+    return user["username"] if user else "anonymous"
 
 
 def _require_same_origin(request: Request) -> None:
@@ -220,12 +287,14 @@ def _require_same_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Origen no autorizado")
 
 
-def _require_user(request: Request) -> str:
-    username = _read_session(request)
-    if not username:
+def _require_user(request: Request, role: str = "viewer") -> str:
+    user = _session_user(request)
+    if not user:
         raise HTTPException(status_code=401, detail="Sesion requerida")
     _require_same_origin(request)
-    return username
+    if not role_allows(user["role"], role):
+        raise HTTPException(status_code=403, detail="Tu rol no permite esta accion")
+    return user["username"]
 
 
 def _registration_code() -> str:
@@ -304,18 +373,41 @@ def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="Token Bearer requerido")
     token_hash = hash_agent_token(credential.strip())
     with connect() as db:
+        now_value = _db_time(db, datetime.now(timezone.utc))
         row = db.execute(
             """
-            SELECT d.* FROM devices d
+            SELECT d.*, c.id AS credential_id, c.expires_at AS credential_expires_at,
+                c.created_at AS credential_created_at
+            FROM devices d
             JOIN agent_credentials c ON c.device_id = d.device_id
             WHERE d.device_id = ? AND c.token = ? AND c.active = ?
+                AND (c.expires_at IS NULL OR c.expires_at > ?)
             """,
-            (device_id, token_hash, True),
+            (device_id, token_hash, True, now_value),
         ).fetchone()
-        if row:
-            db.execute("UPDATE agent_credentials SET last_used_at=CURRENT_TIMESTAMP WHERE device_id=? AND token=?", (device_id, token_hash))
-            return dict(row)
-        raise HTTPException(status_code=403, detail="Token invalido para el equipo")
+        if not row:
+            raise HTTPException(status_code=403, detail="Token invalido para el equipo")
+        db.execute("UPDATE agent_credentials SET last_used_at=CURRENT_TIMESTAMP WHERE id=?", (row["credential_id"],))
+        if row["credential_expires_at"] is None:
+            # First use of a rotated credential: older credentials of this
+            # device were only kept alive as a grace period, retire them now.
+            retired = db.execute(
+                """
+                UPDATE agent_credentials SET active=?
+                WHERE device_id=? AND id<>? AND active=? AND expires_at IS NOT NULL
+                """,
+                (False, device_id, row["credential_id"], True),
+            )
+            if retired.rowcount:
+                db.execute(
+                    "UPDATE devices SET credential_rotation_requested=? WHERE device_id=?",
+                    (False, device_id),
+                )
+        return dict(row)
+
+
+def _db_time(db: Any, value: datetime) -> Any:
+    return value if db.is_postgres else value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 @app.get("/")
@@ -369,15 +461,36 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
     if _production_mode():
         validate_security_config()
     client_hash = _check_login_limit(request)
-    valid_user = hmac.compare_digest(payload.username, _admin_username())
-    valid_password = hmac.compare_digest(payload.password, _admin_password())
-    if not valid_user or not valid_password:
+    source = client_hash[:16]
+    role: str | None = None
+    epoch = 0
+    if hmac.compare_digest(payload.username, _admin_username()):
+        if hmac.compare_digest(payload.password, _admin_password()):
+            role = "admin"
+    else:
+        with connect() as db:
+            row = db.execute(
+                "SELECT id, role, active, password_hash, session_epoch FROM users WHERE username=?",
+                (payload.username,),
+            ).fetchone()
+        if row is None:
+            burn_password_check(payload.password)
+        elif verify_password(payload.password, row["password_hash"]) and row["active"] not in {False, 0, "0"}:
+            role = row["role"]
+            epoch = int(row["session_epoch"])
+            with connect() as db:
+                db.execute("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?", (row["id"],))
+    if role is None:
+        with connect() as db:
+            audit(db, payload.username[:64] or "?", "login.failure", source=source)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
     _clear_login_limit(client_hash)
-    response = JSONResponse({"ok": True, "username": payload.username})
+    with connect() as db:
+        audit(db, payload.username, "login.success", details={"role": role}, source=source)
+    response = JSONResponse({"ok": True, "username": payload.username, "role": role})
     response.set_cookie(
         SESSION_COOKIE,
-        _create_session(payload.username),
+        _create_session(payload.username, epoch),
         max_age=SESSION_MAX_AGE,
         httponly=True,
         secure=_production_mode() or os.getenv("COOKIE_SECURE", "true").lower() != "false",
@@ -388,7 +501,9 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
 
 @app.post("/api/logout")
 def logout(request: Request) -> Response:
-    _require_user(request)
+    username = _require_user(request)
+    with connect() as db:
+        audit(db, username, "logout", source=_client_hash(request))
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE)
     return response
@@ -396,7 +511,108 @@ def logout(request: Request) -> Response:
 
 @app.get("/api/me")
 def me(request: Request) -> dict[str, Any]:
-    return {"username": _require_user(request)}
+    _require_user(request)
+    user = _session_user(request) or {}
+    return {
+        "username": user.get("username"),
+        "role": user.get("role"),
+        "role_label": ROLE_LABELS.get(user.get("role", ""), user.get("role")),
+        "bootstrap": user.get("bootstrap", False),
+    }
+
+
+@app.get("/api/users")
+def list_users(request: Request) -> dict[str, Any]:
+    _require_user(request, "admin")
+    with connect() as db:
+        rows = db.execute(
+            "SELECT id, username, role, active, last_login_at, created_at, updated_at FROM users ORDER BY username"
+        ).fetchall()
+    return {
+        "bootstrap_admin": _admin_username(),
+        "users": [public_user(row) for row in rows],
+        "roles": ROLE_LABELS,
+    }
+
+
+@app.post("/api/users")
+def create_user(payload: UserCreateRequest, request: Request) -> dict[str, Any]:
+    actor = _require_user(request, "admin")
+    try:
+        username = validate_username(payload.username)
+        role = validate_role(payload.role)
+        validate_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if username.lower() == _admin_username().lower():
+        raise HTTPException(status_code=409, detail="Ese nombre esta reservado para el administrador inicial")
+    with connect() as db:
+        if db.execute("SELECT id FROM users WHERE lower(username)=lower(?)", (username,)).fetchone():
+            raise HTTPException(status_code=409, detail="El usuario ya existe")
+        user_id = insert_returning_id(
+            db,
+            "INSERT INTO users(username, role, password_hash) VALUES (?, ?, ?)",
+            (username, role, hash_password(payload.password)),
+        )
+        audit(db, actor, "user.create", target_type="user", target_id=username,
+              details={"role": role}, source=_client_hash(request))
+        row = db.execute(
+            "SELECT id, username, role, active, last_login_at, created_at, updated_at FROM users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+    return public_user(row)
+
+
+@app.patch("/api/users/{user_id}")
+def update_user(user_id: int, payload: UserUpdateRequest, request: Request) -> dict[str, Any]:
+    actor = _require_user(request, "admin")
+    changes: dict[str, Any] = {}
+    try:
+        if payload.role is not None:
+            changes["role"] = validate_role(payload.role)
+        if payload.password is not None:
+            validate_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.active is not None:
+        changes["active"] = payload.active
+    if not changes and payload.password is None:
+        raise HTTPException(status_code=400, detail="No hay cambios")
+    with connect() as db:
+        row = db.execute("SELECT id, username FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Usuario no existe")
+        if row["username"] == actor and (changes.get("active") is False or changes.get("role", "admin") != "admin"):
+            raise HTTPException(status_code=409, detail="No puedes quitarte tu propio acceso de administrador")
+        assignments = [f"{column}=?" for column in changes]
+        values = list(changes.values())
+        if payload.password is not None:
+            assignments.append("password_hash=?")
+            values.append(hash_password(payload.password))
+        # Any change to credentials or privileges invalidates open sessions.
+        assignments += ["session_epoch=session_epoch+1", "updated_at=CURRENT_TIMESTAMP"]
+        db.execute(f"UPDATE users SET {', '.join(assignments)} WHERE id=?", (*values, user_id))
+        audit(db, actor, "user.update", target_type="user", target_id=row["username"],
+              details={**changes, "password_changed": payload.password is not None}, source=_client_hash(request))
+        updated = db.execute(
+            "SELECT id, username, role, active, last_login_at, created_at, updated_at FROM users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+    return public_user(updated)
+
+
+@app.get("/api/audit")
+def audit_log(request: Request, limit: int = Query(default=200, ge=1, le=1000)) -> dict[str, Any]:
+    _require_user(request, "admin")
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT id, actor, action, target_type, target_id, details_json, created_at
+            FROM admin_audit_log ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return {"events": [{**dict(row), "details": json_loads(row["details_json"])} for row in rows]}
 
 
 @app.post("/api/register")
@@ -437,18 +653,65 @@ def register(payload: RegisterRequest, request: Request) -> dict[str, Any]:
             "INSERT INTO agent_credentials(device_id, token) VALUES (?, ?)",
             (device_id, stored_token),
         )
+        audit(db, f"agent:{device_id}", "device.register", target_type="device", target_id=device_id,
+              details={"hostname": payload.hostname, "company": payload.company_name},
+              source=_client_hash(request))
         return {"device_id": device_id, "token": token, "hostname": payload.hostname}
+
+
+def _credential_needs_rotation(device: dict[str, Any]) -> bool:
+    if device.get("credential_rotation_requested") in {True, 1, "1"}:
+        return True
+    created = parse_timestamp(device.get("credential_created_at"))
+    return bool(created and datetime.now(timezone.utc) - created > timedelta(days=CREDENTIAL_MAX_AGE_DAYS))
 
 
 @app.post("/api/agent/heartbeat")
 def heartbeat(payload: HeartbeatRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    _device_for_token(payload.device_id, authorization)
+    device = _device_for_token(payload.device_id, authorization)
     with connect() as db:
         db.execute(
             "UPDATE devices SET last_seen=CURRENT_TIMESTAMP, agent_version=? WHERE device_id=?",
             (payload.agent_version, payload.device_id),
         )
-        return {"ok": True, "device_id": payload.device_id}
+        return {
+            "ok": True,
+            "device_id": payload.device_id,
+            "rotate_credential": _credential_needs_rotation(device),
+        }
+
+
+@app.post("/api/agent/rotate-credential")
+def rotate_agent_credential(
+    payload: CredentialRotationRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Issue a new token; the current one stays valid for a grace period.
+
+    The previous credential is retired as soon as the agent authenticates
+    with the new token, so a lost response or a failed config write never
+    locks the device out.
+    """
+    device = _device_for_token(payload.device_id, authorization)
+    token = generate_token()
+    stored_token = hash_agent_token(token)
+    with connect() as db:
+        grace_until = _db_time(db, datetime.now(timezone.utc) + timedelta(seconds=CREDENTIAL_GRACE_SECONDS))
+        db.execute(
+            """
+            UPDATE agent_credentials SET expires_at=?
+            WHERE device_id=? AND active=? AND (expires_at IS NULL OR expires_at > ?)
+            """,
+            (grace_until, payload.device_id, True, grace_until),
+        )
+        db.execute(
+            "INSERT INTO agent_credentials(device_id, token) VALUES (?, ?)",
+            (payload.device_id, stored_token),
+        )
+        db.execute("UPDATE devices SET token=? WHERE device_id=?", (stored_token, payload.device_id))
+        audit(db, f"agent:{payload.device_id}", "device.credential_rotated", target_type="device",
+              target_id=payload.device_id, details={"previous_credential_id": device["credential_id"]})
+    return {"device_id": payload.device_id, "token": token, "grace_seconds": CREDENTIAL_GRACE_SECONDS}
 
 
 @app.post("/api/agent/results")
@@ -645,7 +908,7 @@ def agent_tasks(
 
 @app.post("/api/tasks")
 def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
-    _require_user(request)
+    actor = _require_user(request, "technician")
     if payload.task_type not in ALLOWED_TASKS:
         raise HTTPException(status_code=400, detail="Tipo de tarea no permitido")
     with connect() as db:
@@ -667,12 +930,14 @@ def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
             "INSERT INTO tasks(device_id, task_type, parameters_json) VALUES (?, ?, ?)",
             (payload.device_id, payload.task_type, json_dumps(payload.parameters)),
         )
+        audit(db, actor, "task.create", target_type="device", target_id=payload.device_id,
+              details={"task_id": task_id, "task_type": payload.task_type}, source=_client_hash(request))
         return {"task_id": task_id, "status": "pending", "deduplicated": False}
 
 
 @app.post("/api/devices/{device_id}/reconnect")
 def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
-    _require_user(request)
+    _require_user(request, "technician")
     with connect() as db:
         device = db.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
         if not device:
@@ -688,15 +953,34 @@ def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
             "Ejecuta uno de estos comandos en la computadora del agente para forzar la reconexion."
         ),
         "commands": [
-            "Start-ScheduledTask -TaskName \"CyberCheck MIPYME Agent User\"",
-            "cd C:\\pg2; py -3.12 agent\\windows_agent.py --config agent\\agent_config.render.json --poll-once --max-tasks 10",
+            "Restart-Service -Name CyberCheckAgent",
+            "Get-Content \"$env:ProgramData\\CyberCheck\\public\\status.json\"",
         ],
+    }
+
+
+@app.post("/api/devices/{device_id}/rotate-credential")
+def request_credential_rotation(device_id: str, request: Request) -> dict[str, Any]:
+    actor = _require_user(request, "admin")
+    with connect() as db:
+        updated = db.execute(
+            "UPDATE devices SET credential_rotation_requested=? WHERE device_id=?",
+            (True, device_id),
+        )
+        if not updated.rowcount:
+            raise HTTPException(status_code=404, detail="Equipo no existe")
+        audit(db, actor, "device.rotation_requested", target_type="device", target_id=device_id,
+              source=_client_hash(request))
+    return {
+        "device_id": device_id,
+        "status": "rotation_requested",
+        "message": "El agente renovara su credencial en su proximo heartbeat; la anterior se retira al usar la nueva.",
     }
 
 
 @app.post("/api/devices/{device_id}/disconnect")
 def disconnect_device(device_id: str, request: Request) -> dict[str, Any]:
-    _require_user(request)
+    actor = _require_user(request, "admin")
     with connect() as db:
         device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,)).fetchone()
         if not device:
@@ -706,6 +990,8 @@ def disconnect_device(device_id: str, request: Request) -> dict[str, Any]:
             "UPDATE tasks SET status='canceled', completed_at=CURRENT_TIMESTAMP WHERE device_id=? AND status IN ('pending', 'delivered')",
             (device_id,),
         )
+        audit(db, actor, "device.disconnect", target_type="device", target_id=device_id,
+              source=_client_hash(request))
     return {
         "device_id": device_id,
         "status": "disconnected",
@@ -715,12 +1001,22 @@ def disconnect_device(device_id: str, request: Request) -> dict[str, Any]:
 
 @app.post("/api/devices/{device_id}/reactivate")
 def reactivate_device(device_id: str, request: Request) -> dict[str, Any]:
-    _require_user(request)
+    actor = _require_user(request, "admin")
     with connect() as db:
         device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,)).fetchone()
         if not device:
             raise HTTPException(status_code=404, detail="Equipo no existe")
-        db.execute("UPDATE agent_credentials SET active=? WHERE device_id=?", (True, device_id))
+        # Only the newest credential comes back; tokens superseded by a
+        # rotation must stay retired.
+        db.execute(
+            """
+            UPDATE agent_credentials SET active=?, expires_at=NULL
+            WHERE id = (SELECT MAX(id) FROM agent_credentials WHERE device_id=?)
+            """,
+            (True, device_id),
+        )
+        audit(db, actor, "device.reactivate", target_type="device", target_id=device_id,
+              source=_client_hash(request))
     return {
         "device_id": device_id,
         "status": "active",

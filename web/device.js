@@ -121,7 +121,11 @@ async function ensureSession() {
     return false;
   }
   const data = await response.json();
-  document.getElementById("currentUser").textContent = data.username;
+  document.getElementById("currentUser").textContent = `${data.username} (${data.role_label || data.role})`;
+  // Device credential actions are admin-only; the API enforces it too.
+  const isAdmin = data.role === "admin";
+  document.getElementById("reactivateBtn").hidden = !isAdmin;
+  document.getElementById("disconnectBtn").hidden = !isAdmin;
   return true;
 }
 
@@ -502,6 +506,10 @@ document.getElementById("reactivateBtn").addEventListener("click", async () => {
     window.location.href = "/login";
     return;
   }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    alert(error.detail || "No se pudo reactivar el agente.");
+  }
   await loadDetail();
 });
 document.getElementById("disconnectBtn").addEventListener("click", async () => {
@@ -511,6 +519,10 @@ document.getElementById("disconnectBtn").addEventListener("click", async () => {
   if (response.status === 401) {
     window.location.href = "/login";
     return;
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    alert(error.detail || "No se pudo desconectar el agente.");
   }
   await loadDetail();
 });

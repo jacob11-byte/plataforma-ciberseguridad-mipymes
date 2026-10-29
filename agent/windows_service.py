@@ -6,6 +6,7 @@ import os
 import socket
 import sys
 import threading
+import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -61,11 +62,14 @@ def run_agent_cycle(config: dict[str, Any], max_tasks: int = 10) -> dict[str, An
         ensure_registered(config, Path(config["_config_path"]))
         poll_once(config, max_tasks=max_tasks)
     except Exception as exc:
-        log_failure("Ciclo del servicio sin conexion", exc, config)
+        # 401/403 means the panel revoked this device: the network is fine
+        # but retrying will not help until an administrator reactivates it.
+        revoked = isinstance(exc, urllib.error.HTTPError) and exc.code in {401, 403}
+        log_failure("Credencial rechazada por la API" if revoked else "Ciclo del servicio sin conexion", exc, config)
         status = service_status(
             config,
             service_state="running",
-            connectivity="offline",
+            connectivity="revoked" if revoked else "offline",
             last_attempt=attempted_at,
             last_error=f"{type(exc).__name__}: {redact_error(exc, config)}",
         )
@@ -97,7 +101,6 @@ def run_service_worker(
     try:
         lock.acquire()
         config = load_agent_config(config_path)
-        config["_config_path"] = str(config_path)
         write_public_status(service_status(config, service_state="starting", last_error=None))
         while not stop_event.is_set():
             run_agent_cycle(config, max_tasks=max_tasks)

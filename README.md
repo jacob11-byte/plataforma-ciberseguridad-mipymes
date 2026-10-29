@@ -13,12 +13,33 @@ Prototipo funcional para detectar configuraciones inseguras en equipos Windows a
 
 ## Estado del producto
 
-La version actual es un piloto `0.4` de una sola organizacion. El agente usa una
+La version actual es un piloto `0.5` de una sola organizacion. El agente usa una
 lista cerrada de verificaciones; ninguna IA ejecuta comandos en los equipos.
 Incluye un servicio de Windows independiente de la sesion, cola SQLite para
 resultados sin conexion, aplicacion de bandeja con estado sanitizado, bloqueo
 contra procesos solapados, tareas con lease e identificador idempotente, y
 estados parciales cuando una consulta no produjo evidencia suficiente.
+
+El panel tiene usuarios con roles, auditoria de acciones y rotacion de
+credenciales de agentes:
+
+| Rol | Puede |
+| --- | --- |
+| `viewer` (Solo lectura) | Ver equipos, hallazgos, evidencia y usar el analista |
+| `technician` (Tecnico) | Lo anterior y solicitar revisiones |
+| `admin` (Administrador) | Lo anterior, desconectar/reactivar equipos, rotar credenciales, gestionar usuarios y ver la auditoria |
+
+El usuario de `ADMIN_USERNAME`/`ADMIN_PASSWORD` es el administrador inicial y
+no se guarda en la base de datos; desde la pestana **Usuarios** se crean las
+demas cuentas (contrasenas de 12+ caracteres, almacenadas con scrypt). Cambiar
+contrasena, rol o desactivar un usuario cierra sus sesiones abiertas.
+
+Cada credencial de agente se renueva automaticamente al superar
+`AGENT_CREDENTIAL_MAX_AGE_DAYS` (90 por defecto) o cuando un administrador pulsa
+**Rotar credencial**. El token anterior sigue valido hasta que el agente usa el
+nuevo (maximo 24 horas), de modo que un corte de red durante la rotacion no
+deja al equipo sin acceso. Si un equipo es desconectado desde el panel, la
+bandeja lo muestra como "Equipo desconectado desde el panel".
 
 La integracion Wazuh incluida es todavia un cliente de lectura y laboratorio;
 no se activa solamente definiendo variables de entorno. El aislamiento entre
@@ -65,6 +86,8 @@ ADMIN_PASSWORD=elige-una-contrasena-segura
 SESSION_SECRET=un-texto-largo-aleatorio
 AGENT_REGISTRATION_CODE=codigo-largo-para-registrar-agentes
 CYBERCHECK_ENV=production
+# Opcional: dias de vida de cada credencial de agente (por defecto 90)
+AGENT_CREDENTIAL_MAX_AGE_DAYS=90
 ```
 
 Si `DATABASE_URL` existe, la app usa PostgreSQL. Si no existe, usa SQLite local en `data/cybercheck.db`.

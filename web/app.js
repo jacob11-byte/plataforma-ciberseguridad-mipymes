@@ -1,7 +1,7 @@
 import { dashboardModules, renderModule } from "/static/modules/dashboardModules.js";
 import { escapeHtml } from "/static/modules/utils.js";
 
-const state = { dashboard: null, ai: null, activeModule: "computadoras" };
+const state = { dashboard: null, ai: null, user: null, users: null, audit: null, activeModule: "computadoras" };
 
 async function ensureSession() {
   const response = await fetch("/api/me");
@@ -9,9 +9,34 @@ async function ensureSession() {
     window.location.href = "/login";
     return false;
   }
-  const data = await response.json();
-  document.getElementById("currentUser").textContent = data.username;
+  state.user = await response.json();
+  document.getElementById("currentUser").textContent = `${state.user.username} (${state.user.role_label || state.user.role})`;
   return true;
+}
+
+async function postJson(url, body, method = "POST") {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    throw new Error("Sesion expirada");
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || `Error ${response.status}`);
+  return data;
+}
+
+async function loadModuleData() {
+  if (state.activeModule === "usuarios") {
+    const response = await fetch("/api/users");
+    if (response.ok) state.users = await response.json();
+  } else if (state.activeModule === "auditoria") {
+    const response = await fetch("/api/audit?limit=300");
+    if (response.ok) state.audit = (await response.json()).events;
+  }
 }
 
 async function loadDashboard() {
@@ -25,7 +50,7 @@ async function loadDashboard() {
     return;
   }
   state.dashboard = await response.json();
-  await loadAiSummary();
+  await Promise.all([loadAiSummary(), loadModuleData()]);
   document.getElementById("lastUpdated").textContent = `Actualizado ${new Date().toLocaleTimeString()}`;
   render();
 }
@@ -60,14 +85,16 @@ function renderMetrics() {
 }
 
 function renderModuleTabs() {
-  document.getElementById("moduleTabs").innerHTML = dashboardModules.map(([id, label]) => `
+  document.getElementById("moduleTabs").innerHTML = dashboardModules(state.user).map(([id, label]) => `
     <button class="tab ${state.activeModule === id ? "active" : ""}" data-module="${id}">${escapeHtml(label)}</button>
   `).join("");
   document.querySelectorAll("[data-module]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       state.activeModule = button.dataset.module;
       renderActiveModule();
       renderModuleTabs();
+      await loadModuleData();
+      renderActiveModule();
     });
   });
 }
@@ -86,6 +113,23 @@ function attachModuleHandlers() {
   });
   document.querySelectorAll(".reactivate-btn").forEach((button) => {
     button.addEventListener("click", () => reactivateDevice(button.dataset.deviceId));
+  });
+  document.querySelectorAll(".rotate-btn").forEach((button) => {
+    button.addEventListener("click", () => rotateCredential(button.dataset.deviceId));
+  });
+  const userForm = document.getElementById("userForm");
+  if (userForm) userForm.addEventListener("submit", createUser);
+  document.querySelectorAll(".user-role").forEach((select) => {
+    select.addEventListener("change", () => updateUser(select.dataset.userId, { role: select.value }));
+  });
+  document.querySelectorAll(".user-active-btn").forEach((button) => {
+    button.addEventListener("click", () => updateUser(button.dataset.userId, { active: button.dataset.active === "true" }));
+  });
+  document.querySelectorAll(".user-password-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = document.querySelector(`.user-password[data-user-id="${button.dataset.userId}"]`);
+      if (input && input.value) updateUser(button.dataset.userId, { password: input.value });
+    });
   });
   const taskForm = document.getElementById("taskForm");
   if (taskForm) taskForm.addEventListener("submit", createTask);
@@ -185,6 +229,53 @@ async function reactivateDevice(deviceId) {
   const data = await response.json();
   notice.innerHTML = `<strong>Agente reactivado</strong><p>${escapeHtml(data.message || "El agente fue reactivado.")}</p>`;
   await loadDashboard();
+}
+
+function userNotice(message, isError = false) {
+  const notice = document.getElementById("userNotice");
+  if (!notice) return;
+  notice.hidden = false;
+  notice.innerHTML = isError ? `<span class="error">${escapeHtml(message)}</span>` : escapeHtml(message);
+}
+
+async function createUser(event) {
+  event.preventDefault();
+  try {
+    const user = await postJson("/api/users", {
+      username: document.getElementById("newUsername").value,
+      password: document.getElementById("newPassword").value,
+      role: document.getElementById("newRole").value,
+    });
+    await loadModuleData();
+    renderActiveModule();
+    userNotice(`Usuario ${user.username} creado con rol ${user.role_label}.`);
+  } catch (error) {
+    userNotice(error.message, true);
+  }
+}
+
+async function updateUser(userId, changes) {
+  try {
+    const user = await postJson(`/api/users/${encodeURIComponent(userId)}`, changes, "PATCH");
+    await loadModuleData();
+    renderActiveModule();
+    userNotice(`Usuario ${user.username} actualizado. Sus sesiones abiertas fueron cerradas.`);
+  } catch (error) {
+    await loadModuleData();
+    renderActiveModule();
+    userNotice(error.message, true);
+  }
+}
+
+async function rotateCredential(deviceId) {
+  const notice = document.getElementById("reconnectNotice");
+  notice.hidden = false;
+  try {
+    const data = await postJson(`/api/devices/${encodeURIComponent(deviceId)}/rotate-credential`);
+    notice.innerHTML = `<strong>Rotacion solicitada</strong><p>${escapeHtml(data.message)}</p>`;
+  } catch (error) {
+    notice.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+  }
 }
 
 document.getElementById("refreshBtn").addEventListener("click", loadDashboard);

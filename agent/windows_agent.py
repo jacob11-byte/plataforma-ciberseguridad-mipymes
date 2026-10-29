@@ -31,7 +31,7 @@ from agent.modules.security_controls import collect_security_controls
 from agent.modules.software_inventory import collect_installed_software
 from agent.modules.system_inventory import collect_system_inventory
 
-AGENT_VERSION = "0.4.0"
+AGENT_VERSION = "0.5.0"
 LOGGER = logging.getLogger("cybercheck.agent")
 HTTP_TIMEOUT_SECONDS = 60
 HTTP_MAX_ATTEMPTS = 3
@@ -154,6 +154,7 @@ def load_agent_config(config_path: Path) -> dict[str, Any]:
     if os.getenv("API_BASE_URL"):
         config["api_url"] = os.environ["API_BASE_URL"]
     validate_agent_config(config)
+    config["_config_path"] = str(config_path)
     return config
 
 
@@ -388,7 +389,8 @@ def write_agent_config(config: dict[str, Any], config_path: Path) -> None:
             prefix=f".{config_path.name}.", suffix=".tmp", delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
-            json.dump(config, temporary, indent=2)
+            # Keys starting with "_" are runtime-only (e.g. "_config_path").
+            json.dump({k: v for k, v in config.items() if not k.startswith("_")}, temporary, indent=2)
             temporary.flush()
             os.fsync(temporary.fileno())
         os.replace(temporary_path, config_path)
@@ -408,6 +410,32 @@ def ensure_registered(config: dict[str, Any], config_path: Path) -> None:
     config.pop("registration_code", None)
     write_agent_config(config, config_path)
     LOGGER.info("Agente registrado: %s", result["device_id"])
+
+
+def rotate_credential(config: dict[str, Any]) -> bool:
+    """Swap the device token for a fresh one issued by the server.
+
+    The new token is persisted before it is used. If the write fails the old
+    token is kept; the server leaves it valid for a grace period and will ask
+    again on the next heartbeat.
+    """
+    config_path = config.get("_config_path")
+    if not config_path:
+        LOGGER.warning("Rotacion de credencial omitida: configuracion sin ruta persistente")
+        return False
+    result = request_json(
+        "POST",
+        f"{config['api_url'].rstrip('/')}/api/agent/rotate-credential",
+        config["token"],
+        {"device_id": config["device_id"]},
+    )
+    new_token = result.get("token")
+    if not isinstance(new_token, str) or len(new_token) < 20:
+        raise ValueError("La API devolvio una credencial invalida")
+    write_agent_config({**config, "token": new_token}, Path(config_path))
+    config["token"] = new_token
+    LOGGER.info("Credencial del agente renovada")
+    return True
 
 
 def send_heartbeat(config: dict[str, Any]) -> dict[str, Any]:
@@ -812,8 +840,13 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
     queue_status = flush_outbox(config)
     if queue_status["sent"]:
         LOGGER.info("Resultados recuperados de la cola: %s", queue_status["sent"])
-    send_heartbeat(config)
+    heartbeat = send_heartbeat(config)
     LOGGER.info("Heartbeat enviado")
+    if heartbeat.get("rotate_credential"):
+        try:
+            rotate_credential(config)
+        except Exception as exc:
+            log_failure("No se pudo renovar la credencial; se reintentara", exc, config)
     url = (
         f"{config['api_url'].rstrip('/')}/api/agent/tasks"
         f"?device_id={urllib.parse.quote(config['device_id'])}&max_tasks={max_tasks}"

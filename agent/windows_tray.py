@@ -21,6 +21,7 @@ def status_summary(status: dict[str, Any]) -> str:
     labels = {
         ("running", "online"): "Proteccion activa y conectada",
         ("running", "offline"): "Proteccion activa, servidor sin conexion",
+        ("running", "revoked"): "Equipo desconectado desde el panel",
         ("starting", "unknown"): "Servicio iniciando",
         ("stopped", "online"): "Servicio detenido",
         ("failed", "unknown"): "Servicio con error",
