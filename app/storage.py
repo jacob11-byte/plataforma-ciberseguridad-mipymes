@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS scans (
     duration_ms INTEGER,
     modules_success INTEGER,
     modules_error INTEGER,
+    request_id TEXT,
+    task_id INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS evidences (
@@ -101,7 +103,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     parameters_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     delivered_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    delivery_attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    result_scan_id INTEGER REFERENCES scans(id)
 );
 CREATE TABLE IF NOT EXISTS device_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,6 +182,11 @@ CREATE TABLE IF NOT EXISTS registration_rate_limits (
     window_started BIGINT NOT NULL,
     attempts INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS login_rate_limits (
+    client_hash TEXT PRIMARY KEY,
+    window_started BIGINT NOT NULL,
+    attempts INTEGER NOT NULL
+);
 """
 
 POSTGRES_SCHEMA = (
@@ -245,6 +255,10 @@ class Cursor:
             return row["id"] if row else None
         return self.cursor.lastrowid
 
+    @property
+    def rowcount(self) -> int:
+        return int(self.cursor.rowcount)
+
     def fetchone(self) -> Any:
         return self.cursor.fetchone()
 
@@ -289,6 +303,29 @@ def migrate_db(db: Database) -> None:
     for name, column_type in scan_additions.items():
         if name not in scan_columns:
             db.execute(f"ALTER TABLE scans ADD COLUMN {name} {column_type}")
+
+    scan_columns = set(table_columns(db, "scans"))
+    for name, column_type in {"request_id": "TEXT", "task_id": "INTEGER"}.items():
+        if name not in scan_columns:
+            db.execute(f"ALTER TABLE scans ADD COLUMN {name} {column_type}")
+
+    task_columns = set(table_columns(db, "tasks"))
+    task_additions = {
+        "delivery_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "last_error": "TEXT",
+        "result_scan_id": "INTEGER",
+    }
+    for name, column_type in task_additions.items():
+        if name not in task_columns:
+            db.execute(f"ALTER TABLE tasks ADD COLUMN {name} {column_type}")
+
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_scans_device_request "
+        "ON scans(device_id, request_id) WHERE request_id IS NOT NULL"
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_device_status ON tasks(device_id, status, delivered_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_evidences_device_created ON evidences(device_id, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_findings_device_status ON findings(device_id, status)")
 
     legacy_token = "de" + "mo" + "-token"
     credential_rows = db.execute("SELECT device_id, token FROM devices WHERE token <> ?", (legacy_token,)).fetchall()

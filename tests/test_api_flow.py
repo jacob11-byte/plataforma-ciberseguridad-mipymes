@@ -69,6 +69,12 @@ class ApiFlowTest(unittest.TestCase):
         self.assertEqual(module.status_code, 200, module.text)
         self.assertIn("application/javascript", module.headers["content-type"])
 
+    def test_health_endpoints_report_process_and_database(self):
+        self.assertEqual(self.client.get("/health/live").json(), {"status": "ok"})
+        ready = self.client.get("/health/ready")
+        self.assertEqual(ready.status_code, 200, ready.text)
+        self.assertEqual(ready.json(), {"status": "ready"})
+
     def test_invalid_agent_auth_is_rejected(self):
         registered = self.register_agent()
         response = self.client.post(
@@ -170,6 +176,55 @@ class ApiFlowTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(response.json()["tasks"]), 5)
+        self.assertTrue(all(task["status"] == "delivered" for task in response.json()["tasks"]))
+        second = self.client.get(
+            f"/api/agent/tasks?device_id={registered['device_id']}&max_tasks=10",
+            headers=self.auth_header(registered["token"]),
+        )
+        self.assertEqual(second.json()["tasks"], [])
+
+    def test_scan_request_is_idempotent_and_completes_its_task(self):
+        registered = self.register_agent()
+        self.login()
+        task = self.client.post(
+            "/api/tasks",
+            json={"device_id": registered["device_id"], "task_type": "VERIFY_FIREWALL", "parameters": {}},
+        ).json()
+        delivered = self.client.get(
+            f"/api/agent/tasks?device_id={registered['device_id']}",
+            headers=self.auth_header(registered["token"]),
+        ).json()["tasks"][0]
+        payload = {
+            "device_id": registered["device_id"],
+            "scan_type": "VERIFY_FIREWALL",
+            "request_id": f"task-id:{task['task_id']}",
+            "task_id": delivered["id"],
+            "evidence": {"firewall": {"domain": True, "private": True, "public": True}},
+        }
+        first = self.client.post("/api/agent/results", headers=self.auth_header(registered["token"]), json=payload)
+        second = self.client.post("/api/agent/results", headers=self.auth_header(registered["token"]), json=payload)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first.json()["scan_id"], second.json()["scan_id"])
+        self.assertTrue(second.json()["duplicate"])
+        detail = self.client.get(f"/api/devices/{registered['device_id']}/detail").json()
+        matching = [row for row in detail["tasks"] if row["id"] == delivered["id"]][0]
+        self.assertEqual(matching["status"], "completed")
+        self.assertEqual(matching["result_scan_id"], first.json()["scan_id"])
+
+    def test_pending_task_cannot_be_completed_without_delivery(self):
+        registered = self.register_agent()
+        self.login()
+        task = self.client.post(
+            "/api/tasks",
+            json={"device_id": registered["device_id"], "task_type": "VERIFY_PORTS", "parameters": {}},
+        ).json()
+        response = self.client.post(
+            f"/api/agent/tasks/{task['task_id']}/complete",
+            headers=self.auth_header(registered["token"]),
+            json={},
+        )
+        self.assertEqual(response.status_code, 409)
 
     def test_disconnect_device_disables_agent_token_and_cancels_pending_tasks(self):
         registered = self.register_agent()

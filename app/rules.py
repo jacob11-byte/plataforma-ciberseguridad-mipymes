@@ -176,14 +176,25 @@ def evaluate_rules(evidence: dict[str, Any]) -> list[RuleResult]:
 
     antivirus = evidence.get("antivirus")
     if isinstance(antivirus, dict) and _available(antivirus):
-        preferences = antivirus.get("preferences") or {}
-        if antivirus.get("enabled") is not None and antivirus.get("real_time") is not None:
+        preferences = antivirus.get("preferences")
+        extended_status_available = isinstance(preferences, dict) or all(
+            isinstance(antivirus.get(key), bool)
+            for key in ("on_access_protection", "behavior_monitor", "ioav_protection")
+        )
+        base_status_available = antivirus.get("enabled") is not None and antivirus.get("real_time") is not None
+        base_protection_bad = base_status_available and (
+            not _bool(antivirus["enabled"]) or not _bool(antivirus["real_time"])
+        )
+        if base_status_available and (base_protection_bad or extended_status_available):
+            preferences = preferences if isinstance(preferences, dict) else {}
             realtime_disabled_by_policy = _bool(preferences.get("DisableRealtimeMonitoring", False))
             behavior_disabled_by_policy = _bool(preferences.get("DisableBehaviorMonitoring", False))
             ioav_disabled_by_policy = _bool(preferences.get("DisableIOAVProtection", False))
             av_bad = (
-                not _bool(antivirus["enabled"])
-                or not _bool(antivirus["real_time"])
+                base_protection_bad
+                or antivirus.get("on_access_protection") is False
+                or antivirus.get("behavior_monitor") is False
+                or antivirus.get("ioav_protection") is False
                 or realtime_disabled_by_policy
                 or behavior_disabled_by_policy
                 or ioav_disabled_by_policy

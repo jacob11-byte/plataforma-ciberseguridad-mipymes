@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -65,6 +65,9 @@ SESSION_MAX_AGE = 60 * 60 * 8
 AGENT_ONLINE_WINDOW_SECONDS = 10 * 60
 REGISTRATION_WINDOW_SECONDS = 15 * 60
 REGISTRATION_ATTEMPT_LIMIT = 20
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_ATTEMPT_LIMIT = 10
+TASK_LEASE_SECONDS = 45 * 60
 _DEV_SESSION_SECRET = secrets.token_urlsafe(48)
 
 app = FastAPI(title="CyberCheck MIPYME", version="1.0.0")
@@ -91,12 +94,18 @@ class ScanRequest(BaseModel):
     device_id: str
     scan_type: str
     evidence: dict[str, Any]
+    request_id: str | None = Field(default=None, min_length=8, max_length=128)
+    task_id: int | None = Field(default=None, ge=1)
 
 
 class TaskRequest(BaseModel):
     device_id: str
     task_type: str
     parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskFailureRequest(BaseModel):
+    error: str | None = Field(default=None, max_length=500)
 
 
 class LoginRequest(BaseModel):
@@ -247,6 +256,46 @@ def _check_registration_limit(request: Request) -> None:
         raise HTTPException(status_code=429, detail="Demasiados intentos de registro", headers={"Retry-After": str(retry_after)})
 
 
+def _login_client_hash(request: Request) -> str:
+    client_host = request.client.host if request.client else "unknown"
+    return hashlib.sha256(client_host.encode("utf-8")).hexdigest()
+
+
+def _check_login_limit(request: Request) -> str:
+    client_hash = _login_client_hash(request)
+    now = int(time.time())
+    expired_before = now - LOGIN_WINDOW_SECONDS
+    with connect() as db:
+        db.execute(
+            """
+            INSERT INTO login_rate_limits(client_hash, window_started, attempts)
+            VALUES (?, ?, 1)
+            ON CONFLICT(client_hash) DO UPDATE SET
+                window_started = CASE WHEN login_rate_limits.window_started < ?
+                    THEN excluded.window_started ELSE login_rate_limits.window_started END,
+                attempts = CASE WHEN login_rate_limits.window_started < ?
+                    THEN 1 ELSE login_rate_limits.attempts + 1 END
+            """,
+            (client_hash, now, expired_before, expired_before),
+        )
+        row = db.execute(
+            "SELECT attempts, window_started FROM login_rate_limits WHERE client_hash=?", (client_hash,)
+        ).fetchone()
+    if row["attempts"] > LOGIN_ATTEMPT_LIMIT:
+        retry_after = max(1, LOGIN_WINDOW_SECONDS - (now - int(row["window_started"])))
+        raise HTTPException(
+            status_code=429,
+            detail="Demasiados intentos de inicio de sesion",
+            headers={"Retry-After": str(retry_after)},
+        )
+    return client_hash
+
+
+def _clear_login_limit(client_hash: str) -> None:
+    with connect() as db:
+        db.execute("DELETE FROM login_rate_limits WHERE client_hash=?", (client_hash,))
+
+
 def _device_for_token(device_id: str, token: str | None) -> dict[str, Any]:
     if not token:
         raise HTTPException(status_code=401, detail="Token requerido")
@@ -316,13 +365,15 @@ def device_script() -> FileResponse:
 
 
 @app.post("/api/login")
-def login(payload: LoginRequest) -> JSONResponse:
+def login(payload: LoginRequest, request: Request) -> JSONResponse:
     if _production_mode():
         validate_security_config()
+    client_hash = _check_login_limit(request)
     valid_user = hmac.compare_digest(payload.username, _admin_username())
     valid_password = hmac.compare_digest(payload.password, _admin_password())
     if not valid_user or not valid_password:
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
+    _clear_login_limit(client_hash)
     response = JSONResponse({"ok": True, "username": payload.username})
     response.set_cookie(
         SESSION_COOKIE,
@@ -406,8 +457,25 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
     if payload.scan_type not in ALLOWED_TASKS:
         raise HTTPException(status_code=400, detail="Tipo de tarea no permitido")
 
-    rule_results = evaluate_rules(payload.evidence)
     with connect() as db:
+        if payload.request_id:
+            duplicate = db.execute(
+                "SELECT id FROM scans WHERE device_id=? AND request_id=?",
+                (payload.device_id, payload.request_id),
+            ).fetchone()
+            if duplicate:
+                return {"scan_id": duplicate["id"], "evaluated_rules": 0, "duplicate": True}
+        if payload.task_id is not None:
+            task = db.execute("SELECT * FROM tasks WHERE id=?", (payload.task_id,)).fetchone()
+            if (
+                not task
+                or task["device_id"] != payload.device_id
+                or task["task_type"] != payload.scan_type
+                or task["status"] not in {"delivered", "completed"}
+            ):
+                raise HTTPException(status_code=409, detail="La tarea no esta entregada a este equipo")
+
+        rule_results = evaluate_rules(payload.evidence)
         db.execute("UPDATE devices SET last_seen = CURRENT_TIMESTAMP WHERE device_id = ?", (payload.device_id,))
         system_info = payload.evidence.get("system_info") or {}
         if system_info:
@@ -435,15 +503,19 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
         scan_id = insert_returning_id(
             db,
             """
-            INSERT INTO scans(device_id, scan_type, status, completed_at, duration_ms, modules_success, modules_error)
-            VALUES (?, ?, 'completed', CURRENT_TIMESTAMP, ?, ?, ?)
+            INSERT INTO scans(device_id, scan_type, status, completed_at, duration_ms, modules_success, modules_error,
+                request_id, task_id)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
             """,
             (
                 payload.device_id,
                 payload.scan_type,
+                "partial" if _int_or_none((payload.evidence.get("scan_metadata") or {}).get("modules_error")) else "completed",
                 _int_or_none((payload.evidence.get("scan_metadata") or {}).get("duration_ms")),
                 _int_or_none((payload.evidence.get("scan_metadata") or {}).get("modules_success")),
                 _int_or_none((payload.evidence.get("scan_metadata") or {}).get("modules_error")),
+                payload.request_id,
+                payload.task_id,
             ),
         )
         for control, value in status_evidence(payload.evidence).items():
@@ -515,7 +587,16 @@ def receive_results(payload: ScanRequest, authorization: str | None = Header(def
                     "INSERT INTO history(finding_id, previous_status, new_status, note, scan_id) VALUES (?, ?, 'resolved', ?, ?)",
                     (existing["id"], existing["status"], "Correccion verificada con nueva evidencia tecnica.", scan_id),
                 )
-        return {"scan_id": scan_id, "evaluated_rules": len(rule_results)}
+        if payload.task_id is not None:
+            db.execute(
+                """
+                UPDATE tasks SET status='completed', completed_at=CURRENT_TIMESTAMP,
+                    result_scan_id=?, last_error=NULL
+                WHERE id=? AND device_id=?
+                """,
+                (scan_id, payload.task_id, payload.device_id),
+            )
+        return {"scan_id": scan_id, "evaluated_rules": len(rule_results), "duplicate": False}
 
 
 @app.get("/api/agent/tasks")
@@ -526,22 +607,39 @@ def agent_tasks(
 ) -> dict[str, Any]:
     _device_for_token(device_id, authorization)
     with connect() as db:
-        rows = db.execute(
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=TASK_LEASE_SECONDS)
+        cutoff_value: Any = cutoff if db.is_postgres else cutoff.strftime("%Y-%m-%d %H:%M:%S")
+        candidates = db.execute(
             """
             SELECT * FROM tasks
-            WHERE device_id = ? AND status IN ('pending', 'delivered')
+            WHERE device_id = ? AND (
+                status='pending' OR (status='delivered' AND (delivered_at IS NULL OR delivered_at < ?))
+            )
             ORDER BY created_at
             LIMIT ?
             """,
-            (device_id, max_tasks),
+            (device_id, cutoff_value, max_tasks),
         ).fetchall()
-        task_ids = [row["id"] for row in rows if row["status"] == "pending"]
-        if task_ids:
-            placeholders = ",".join("?" for _ in task_ids)
-            db.execute(
-                f"UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
-                task_ids,
+        claimed_ids: list[int] = []
+        for row in candidates:
+            claimed = db.execute(
+                """
+                UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP,
+                    delivery_attempts=delivery_attempts+1
+                WHERE id=? AND device_id=? AND (
+                    status='pending' OR (status='delivered' AND (delivered_at IS NULL OR delivered_at < ?))
+                )
+                """,
+                (row["id"], device_id, cutoff_value),
             )
+            if claimed.rowcount == 1:
+                claimed_ids.append(row["id"])
+        if not claimed_ids:
+            return {"tasks": []}
+        placeholders = ",".join("?" for _ in claimed_ids)
+        rows = db.execute(
+            f"SELECT * FROM tasks WHERE id IN ({placeholders}) ORDER BY created_at", claimed_ids
+        ).fetchall()
         return {"tasks": [dict(row) for row in rows]}
 
 
@@ -554,12 +652,22 @@ def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
         device = db.execute("SELECT device_id FROM devices WHERE device_id = ?", (payload.device_id,)).fetchone()
         if not device:
             raise HTTPException(status_code=404, detail="Equipo no existe")
+        existing = db.execute(
+            """
+            SELECT id, status FROM tasks
+            WHERE device_id=? AND task_type=? AND status IN ('pending', 'delivered')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (payload.device_id, payload.task_type),
+        ).fetchone()
+        if existing:
+            return {"task_id": existing["id"], "status": existing["status"], "deduplicated": True}
         task_id = insert_returning_id(
             db,
             "INSERT INTO tasks(device_id, task_type, parameters_json) VALUES (?, ?, ?)",
             (payload.device_id, payload.task_type, json_dumps(payload.parameters)),
         )
-        return {"task_id": task_id, "status": "pending"}
+        return {"task_id": task_id, "status": "pending", "deduplicated": False}
 
 
 @app.post("/api/devices/{device_id}/reconnect")
@@ -714,26 +822,72 @@ def complete_task(task_id: int, request: Request, authorization: str | None = He
         if not task:
             raise HTTPException(status_code=404, detail="Tarea no existe")
         _device_for_token(task["device_id"], authorization)
+        if task["status"] == "completed":
+            return {"status": "completed"}
+        if task["status"] != "delivered":
+            raise HTTPException(status_code=409, detail="La tarea no fue entregada")
         db.execute("UPDATE tasks SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
         return {"status": "completed"}
 
 
 @app.post("/api/agent/tasks/{task_id}/fail")
-def fail_task(task_id: int, authorization: str | None = Header(default=None)) -> dict[str, str]:
+def fail_task(
+    task_id: int,
+    payload: TaskFailureRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, str]:
     with connect() as db:
         task = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if not task:
             raise HTTPException(status_code=404, detail="Tarea no existe")
         _device_for_token(task["device_id"], authorization)
-        db.execute("UPDATE tasks SET status='failed', completed_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
+        if task["status"] == "failed":
+            return {"status": "failed"}
+        if task["status"] != "delivered":
+            raise HTTPException(status_code=409, detail="La tarea no fue entregada")
+        db.execute(
+            "UPDATE tasks SET status='failed', completed_at=CURRENT_TIMESTAMP, last_error=? WHERE id=?",
+            (payload.error, task_id),
+        )
         return {"status": "failed"}
+
+
+@app.get("/health/live")
+def health_live() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready() -> Response:
+    try:
+        with connect() as db:
+            db.execute("SELECT 1").fetchone()
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+    return JSONResponse({"status": "ready"})
 
 
 @app.get("/api/dashboard")
 def dashboard(request: Request) -> dict[str, Any]:
     _require_user(request)
     with connect() as db:
-        evidences = [dict(row) for row in db.execute("SELECT * FROM evidences ORDER BY created_at DESC LIMIT 120")]
+        evidences = [dict(row) for row in db.execute(
+            """
+            SELECT * FROM (
+                SELECT e.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY e.device_id, e.control
+                        ORDER BY e.created_at DESC, e.id DESC
+                    ) AS evidence_rank
+                FROM evidences e
+            ) latest
+            WHERE evidence_rank=1
+            ORDER BY created_at DESC, id DESC
+            LIMIT 2000
+            """
+        )]
+        for evidence in evidences:
+            evidence.pop("evidence_rank", None)
         devices = [device_view(dict(row)) for row in db.execute(
             """
             SELECT d.*,
@@ -810,6 +964,7 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
             }
     if "antivirus" in controls and "threats" not in controls:
         antivirus_data = controls["antivirus"].get("data") or {}
+        threats_error = (antivirus_data.get("collection_errors") or {}).get("threats")
         controls["threats"] = {
             "control": "threats",
             "label": CONTROL_TABS["threats"],
@@ -819,8 +974,8 @@ def latest_controls_from_evidences(evidences: list[dict[str, Any]]) -> dict[str,
             "data": {
                 "active_threat_count": antivirus_data.get("active_threat_count"),
                 "threats": antivirus_data.get("threats", []),
-                "status": antivirus_data.get("status"),
-                "error": antivirus_data.get("error"),
+                "status": "error" if threats_error else antivirus_data.get("status"),
+                "error": threats_error or antivirus_data.get("error"),
             },
         }
     return controls

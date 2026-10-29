@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import socket
 import sys
 import tempfile
@@ -11,10 +12,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -27,8 +30,10 @@ from agent.modules.security_controls import collect_security_controls
 from agent.modules.software_inventory import collect_installed_software
 from agent.modules.system_inventory import collect_system_inventory
 
-AGENT_VERSION = "0.2.0"
+AGENT_VERSION = "0.3.0"
 LOGGER = logging.getLogger("cybercheck.agent")
+HTTP_TIMEOUT_SECONDS = 60
+HTTP_MAX_ATTEMPTS = 3
 
 ALLOWED_TASKS = {
     "FULL_SCAN",
@@ -48,16 +53,71 @@ ALLOWED_TASKS = {
 }
 
 
+class AgentAlreadyRunning(RuntimeError):
+    pass
+
+
+class AgentInstanceLock:
+    """Cross-process lock that prevents duplicate scans and enrollment races."""
+
+    def __init__(self, config_path: Path) -> None:
+        self.path = config_path.with_name(f".{config_path.name}.lock")
+        self.handle: Any | None = None
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("a+b")
+        self.handle.seek(0, os.SEEK_END)
+        if self.handle.tell() == 0:
+            self.handle.write(b"0")
+            self.handle.flush()
+        self.handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError) as exc:
+            self.handle.close()
+            self.handle = None
+            raise AgentAlreadyRunning("Ya existe una instancia del agente para esta configuracion") from exc
+
+    def release(self) -> None:
+        if self.handle is None:
+            return
+        try:
+            self.handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
+
+
 def configure_logging() -> None:
     if LOGGER.handlers:
         return
     LOGGER.setLevel(logging.INFO)
     LOGGER.propagate = False
-    log_roots = [
-        Path(os.environ["CYBERCHECK_LOG_DIR"]) if os.environ.get("CYBERCHECK_LOG_DIR") else
+    log_roots: list[Path] = []
+    if os.environ.get("CYBERCHECK_LOG_DIR"):
+        log_roots.append(Path(os.environ["CYBERCHECK_LOG_DIR"]))
+    if os.environ.get("PROGRAMDATA"):
+        log_roots.append(Path(os.environ["PROGRAMDATA"]) / "CyberCheck" / "logs")
+    log_roots.extend([
         Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "CyberCheck" / "logs",
         Path(tempfile.gettempdir()) / "CyberCheck" / "logs",
-    ]
+    ])
     for root in log_roots:
         try:
             root.mkdir(parents=True, exist_ok=True)
@@ -79,6 +139,46 @@ def log_failure(context: str, exc: Exception, config: dict[str, Any] | None = No
             if isinstance(secret, str) and secret:
                 message = message.replace(secret, "[REDACTED]")
     LOGGER.error("%s: %s: %s", context, type(exc).__name__, message[:500])
+
+
+def validate_agent_config(config: dict[str, Any]) -> None:
+    """Reject configurations that would expose credentials or fail unpredictably."""
+    api_url = config.get("api_url")
+    if not isinstance(api_url, str) or not api_url.strip():
+        raise ValueError("api_url es obligatorio")
+    parsed = urlsplit(api_url.strip())
+    local_hosts = {"localhost", "127.0.0.1", "::1"}
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("api_url debe ser un origen sin credenciales, ruta, consulta ni fragmento")
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in local_hosts):
+        raise ValueError("api_url debe usar HTTPS; HTTP solo se permite para desarrollo local")
+
+    has_device = isinstance(config.get("device_id"), str) and bool(config["device_id"].strip())
+    has_token = isinstance(config.get("token"), str) and bool(config["token"].strip())
+    if has_device != has_token:
+        raise ValueError("device_id y token deben existir juntos")
+    registered = has_device and has_token
+    if not registered and not (
+        isinstance(config.get("registration_code"), str) and config["registration_code"].strip()
+    ):
+        raise ValueError("registration_code es obligatorio para registrar el agente")
+    services = config.get("risk_services", ["TermService", "RemoteRegistry", "WinRM"])
+    if not isinstance(services, list) or not services or not all(
+        isinstance(item, str) and item.strip() for item in services
+    ):
+        raise ValueError("risk_services debe ser una lista no vacia de nombres de servicio")
+    if "authorized_local_admins" in config and not (
+        isinstance(config["authorized_local_admins"], list)
+        and all(isinstance(item, str) and item.strip() for item in config["authorized_local_admins"])
+    ):
+        raise ValueError("authorized_local_admins debe ser una lista de cuentas")
 
 
 def collection_error(value: Any) -> dict[str, str] | None:
@@ -257,18 +357,14 @@ def register_device(config: dict[str, Any]) -> dict[str, Any]:
     data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(f"{config['api_url'].rstrip('/')}/api/register", data=data, method="POST")
     request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, timeout=30) as response:
-        result = json.loads(response.read().decode("utf-8"))
+    request.add_header("User-Agent", f"CyberCheck-Agent/{AGENT_VERSION}")
+    result = open_json_with_retry(request)
     config["device_id"] = result["device_id"]
     config["token"] = result["token"]
     return result
 
 
-def ensure_registered(config: dict[str, Any], config_path: Path) -> None:
-    if config.get("device_id") and config.get("token"):
-        return
-    LOGGER.info("Registrando nuevo agente")
-    result = register_device(config)
+def write_agent_config(config: dict[str, Any], config_path: Path) -> None:
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -283,6 +379,18 @@ def ensure_registered(config: dict[str, Any], config_path: Path) -> None:
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def ensure_registered(config: dict[str, Any], config_path: Path) -> None:
+    if config.get("device_id") and config.get("token"):
+        if config.pop("registration_code", None) is not None:
+            write_agent_config(config, config_path)
+            LOGGER.info("Codigo de registro eliminado de la configuracion ya enrolada")
+        return
+    LOGGER.info("Registrando nuevo agente")
+    result = register_device(config)
+    config.pop("registration_code", None)
+    write_agent_config(config, config_path)
     LOGGER.info("Agente registrado: %s", result["device_id"])
 
 
@@ -357,8 +465,19 @@ def collect_antivirus() -> dict[str, Any]:
                     "name": product_name,
                     "error": "Hay un antivirus de terceros; el estado de proteccion requiere verificacion especifica.",
                 }
-        threat_rows = threats if isinstance(threats, list) else ([threats] if isinstance(threats, dict) and not threats.get("error") else [])
-        return {
+        collection_errors: dict[str, str] = {}
+        preferences_error = collection_error(preferences)
+        threats_error = collection_error(threats)
+        if preferences_error:
+            collection_errors["preferences"] = preferences_error["error"]
+        if threats_error:
+            collection_errors["threats"] = threats_error["error"]
+        threat_rows = (
+            threats if isinstance(threats, list)
+            else [threats] if isinstance(threats, dict) and not threats.get("error")
+            else []
+        )
+        result = {
             "enabled": bool(defender.get("AntivirusEnabled")),
             "real_time": bool(defender.get("RealTimeProtectionEnabled")),
             "name": "Microsoft Defender",
@@ -376,10 +495,15 @@ def collect_antivirus() -> dict[str, Any]:
             "behavior_monitor": defender.get("BehaviorMonitorEnabled"),
             "ioav_protection": defender.get("IoavProtectionEnabled"),
             "signatures_out_of_date": defender.get("DefenderSignaturesOutOfDate"),
-            "preferences": preferences if isinstance(preferences, dict) and not preferences.get("error") else {},
-            "threats": threat_rows,
-            "active_threat_count": sum(1 for threat in threat_rows if isinstance(threat, dict) and threat.get("IsActive")),
+            "preferences": preferences if isinstance(preferences, dict) and not preferences.get("error") else None,
+            "threats": None if threats_error else threat_rows,
+            "active_threat_count": None if threats_error else sum(
+                1 for threat in threat_rows if isinstance(threat, dict) and threat.get("IsActive")
+            ),
         }
+        if collection_errors:
+            result["collection_errors"] = collection_errors
+        return result
     error = collection_error(data)
     if error:
         return error
@@ -472,12 +596,18 @@ def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
             result = collector()
             evidence[target_key] = result
             has_error = isinstance(result, dict) and (bool(result.get("error")) or result.get("success") is False)
+            partial_errors = result.get("collection_errors") if isinstance(result, dict) else None
             module_status.append(
                 {
                     "module": name,
-                    "status": "error" if has_error else "ok",
+                    "status": "error" if has_error else "partial" if partial_errors else "ok",
                     "duration_ms": int((time.perf_counter() - module_started) * 1000),
-                    "error": result.get("error") if isinstance(result, dict) else None,
+                    "error": (
+                        result.get("error") if isinstance(result, dict) and result.get("error")
+                        else "; ".join(f"{key}: {value}" for key, value in partial_errors.items())
+                        if isinstance(partial_errors, dict)
+                        else None
+                    ),
                 }
             )
         except Exception as exc:
@@ -524,10 +654,42 @@ def collect_evidence(config: dict[str, Any], task_type: str) -> dict[str, Any]:
     evidence["scan_metadata"] = {
         "duration_ms": int((time.perf_counter() - started) * 1000),
         "modules_success": sum(1 for item in module_status if item["status"] == "ok"),
-        "modules_error": sum(1 for item in module_status if item["status"] == "error"),
+        "modules_error": sum(1 for item in module_status if item["status"] != "ok"),
         "modules": module_status,
     }
     return evidence
+
+
+def retry_delay(attempt: int, error: urllib.error.HTTPError | None = None) -> float:
+    if error is not None:
+        retry_after = error.headers.get("Retry-After")
+        if retry_after and retry_after.isdigit():
+            return min(30.0, max(1.0, float(retry_after)))
+    return min(15.0, (2 ** attempt) + random.uniform(0.0, 1.0))
+
+
+def open_json_with_retry(request: urllib.request.Request) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for attempt in range(HTTP_MAX_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("La API no devolvio un objeto JSON")
+                return payload
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code < 500 and exc.code != 429:
+                raise
+            if attempt + 1 >= HTTP_MAX_ATTEMPTS:
+                raise
+            time.sleep(retry_delay(attempt, exc))
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt + 1 >= HTTP_MAX_ATTEMPTS:
+                raise
+            time.sleep(retry_delay(attempt))
+    raise RuntimeError("No se pudo completar la solicitud") from last_error
 
 
 def request_json(method: str, url: str, token: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -535,11 +697,17 @@ def request_json(method: str, url: str, token: str, body: dict[str, Any] | None 
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header("Authorization", f"Bearer {token}")
     request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    request.add_header("User-Agent", f"CyberCheck-Agent/{AGENT_VERSION}")
+    return open_json_with_retry(request)
 
 
-def send_scan(config: dict[str, Any], task_type: str) -> dict[str, Any]:
+def send_scan(
+    config: dict[str, Any],
+    task_type: str,
+    *,
+    task_id: int | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
     if task_type not in ALLOWED_TASKS:
         raise ValueError(f"Tarea no permitida: {task_type}")
     LOGGER.info("Iniciando verificacion %s", task_type)
@@ -548,7 +716,13 @@ def send_scan(config: dict[str, Any], task_type: str) -> dict[str, Any]:
         "POST",
         f"{config['api_url'].rstrip('/')}/api/agent/results",
         config["token"],
-        {"device_id": config["device_id"], "scan_type": task_type, "evidence": evidence},
+        {
+            "device_id": config["device_id"],
+            "scan_type": task_type,
+            "evidence": evidence,
+            "request_id": request_id or (f"task-id:{task_id}" if task_id is not None else str(uuid.uuid4())),
+            "task_id": task_id,
+        },
     )
     LOGGER.info("Resultado enviado: %s", task_type)
     return result
@@ -565,22 +739,37 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
     if not tasks:
         LOGGER.info("Sin tareas pendientes")
         return
-    seen_task_types = set()
     for task in tasks:
         try:
-            if task["task_type"] in seen_task_types:
-                LOGGER.info("Tarea duplicada omitida: %s %s", task["id"], task["task_type"])
-                request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
-                continue
-            seen_task_types.add(task["task_type"])
             LOGGER.info("Ejecutando tarea %s: %s", task["id"], task["task_type"])
-            send_scan(config, task["task_type"])
+            send_scan(config, task["task_type"], task_id=int(task["id"]))
             request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/complete", config["token"], {})
             LOGGER.info("Tarea completada: %s", task["id"])
+        except urllib.error.HTTPError as exc:
+            log_failure(f"Tarea {task.get('id', '?')} recibio HTTP {exc.code}", exc, config)
+            if exc.code < 500 and exc.code != 429:
+                try:
+                    request_json(
+                        "POST",
+                        f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/fail",
+                        config["token"],
+                        {"error": f"HTTP {exc.code}"},
+                    )
+                except Exception:
+                    pass
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            # Leave the task delivered. The server lease makes it available
+            # again after a transient connectivity or process failure.
+            log_failure(f"Tarea {task.get('id', '?')} se reintentara", exc, config)
         except Exception as exc:
             log_failure(f"Tarea {task.get('id', '?')} fallida", exc, config)
             try:
-                request_json("POST", f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/fail", config["token"], {})
+                request_json(
+                    "POST",
+                    f"{config['api_url'].rstrip('/')}/api/agent/tasks/{task['id']}/fail",
+                    config["token"],
+                    {"error": f"{type(exc).__name__}: {str(exc)[:400]}"},
+                )
             except Exception:
                 pass
 
@@ -608,12 +797,17 @@ def main() -> int:
     configure_logging()
     config_path = Path(args.config)
     config: dict[str, Any] = {}
+    instance_lock = AgentInstanceLock(config_path)
     try:
+        instance_lock.acquire()
         if args.interval < 1 or args.max_tasks < 1:
             raise ValueError("--interval y --max-tasks deben ser mayores que cero")
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+        # ``utf-8-sig`` also accepts ordinary UTF-8 and is tolerant of the BOM
+        # that Windows PowerShell commonly adds when it writes JSON files.
+        config = json.loads(config_path.read_text(encoding="utf-8-sig"))
         if os.getenv("API_BASE_URL"):
             config["api_url"] = os.getenv("API_BASE_URL")
+        validate_agent_config(config)
         LOGGER.info("Agente iniciado en %s", socket.gethostname())
         ensure_registered(config, config_path)
         if args.register:
@@ -629,9 +823,14 @@ def main() -> int:
             result = send_scan(config, args.scan or "FULL_SCAN")
             if sys.stdout is not None:
                 print(json.dumps(result, indent=2))
+    except AgentAlreadyRunning:
+        LOGGER.info("Otra instancia del agente ya esta trabajando; esta ejecucion termina sin error")
+        return 0
     except Exception as exc:
         log_failure("Error del agente", exc, config)
         return 1
+    finally:
+        instance_lock.release()
     return 0
 
 

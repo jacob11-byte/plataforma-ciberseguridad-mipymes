@@ -5,7 +5,7 @@ import { findingCard, latestEvidenceByDeviceAndControl } from "./findings.js";
 
 export const dashboardModules = [
   ["computadoras", "Computadoras"],
-  ["analista", "Analista IA"],
+  ["analista", "Analista de evidencia"],
   ["estado", "Estado"],
   ["problemas", "Problemas"],
   ["revisiones", "Revisiones"],
@@ -79,7 +79,7 @@ function renderAiModule(state) {
   return `
     <div class="section-title">
       <div>
-        <h2>Analista IA</h2>
+        <h2>Analista de evidencia</h2>
         <p>Analisis generado solo con evidencia almacenada en la plataforma.</p>
       </div>
       <span class="badge ${ai.insufficient_evidence ? "medium" : "ok"}">${escapeHtml(ai.risk_level || "sin evidencia")}</span>
@@ -100,7 +100,7 @@ function renderAiModule(state) {
         <input id="aiQuestion" placeholder="Pregunta sobre la evidencia almacenada">
         <button type="submit">Preguntar</button>
       </form>
-      <div id="aiAnswer" class="ai-answer empty-state">La IA respondera solo con evidencia existente.</div>
+      <div id="aiAnswer" class="ai-answer empty-state">El analista responde solo con evidencia almacenada.</div>
     </section>
   `;
 }
@@ -160,6 +160,8 @@ function renderTasksModule(state) {
     <div class="event">
       <strong>${taskLabel(task.task_type)}</strong> en ${escapeHtml(task.device_id)}
       <div><span class="badge ${task.status}">${statusLabel(task.status)}</span></div>
+      ${task.delivery_attempts ? `<div class="muted">Intentos de entrega: ${escapeHtml(task.delivery_attempts)}</div>` : ""}
+      ${task.last_error ? `<div class="error">${escapeHtml(task.last_error)}</div>` : ""}
       <div class="muted">${escapeHtml(task.created_at)}</div>
     </div>
   `).join("") || `<p class="empty-state">Sin solicitudes enviadas.</p>`}</div>`;

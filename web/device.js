@@ -2,7 +2,7 @@ const state = { detail: null, ai: null, tab: "resumen" };
 
 const tabs = [
   ["resumen", "Resumen"],
-  ["analista", "Analista IA"],
+  ["analista", "Analista de evidencia"],
   ["sistema", "Informacion del equipo"],
   ["inventario", "Inventario"],
   ["firewall", "Firewall"],
@@ -196,7 +196,7 @@ async function askDeviceAi(question) {
     body: JSON.stringify({ question }),
   });
   if (!response.ok) {
-    answer.textContent = "No se pudo consultar el Analista IA.";
+    answer.textContent = "No se pudo consultar el analista de evidencia.";
     return;
   }
   const data = await response.json();
@@ -234,7 +234,7 @@ function renderAiTab() {
   return `
     <div class="section-title">
       <div>
-        <h2>Analista IA</h2>
+        <h2>Analista de evidencia</h2>
         <p>Analisis basado solamente en evidencia almacenada de esta computadora.</p>
       </div>
       <span class="badge ${ai.insufficient_evidence ? "medium" : "ok"}">${escapeHtml(ai.risk_level || "sin evidencia")}</span>
@@ -255,7 +255,7 @@ function renderAiTab() {
         <input id="aiQuestion" placeholder="Pregunta sobre esta computadora">
         <button type="submit">Preguntar</button>
       </form>
-      <div id="aiAnswer" class="ai-answer empty-state">La IA respondera solo con evidencia existente.</div>
+      <div id="aiAnswer" class="ai-answer empty-state">El analista responde solo con evidencia almacenada.</div>
     </section>
   `;
 }

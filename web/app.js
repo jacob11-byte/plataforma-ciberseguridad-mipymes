@@ -20,8 +20,13 @@ async function loadDashboard() {
     window.location.href = "/login";
     return;
   }
+  if (!response.ok) {
+    document.getElementById("lastUpdated").textContent = "Error al actualizar";
+    return;
+  }
   state.dashboard = await response.json();
   await loadAiSummary();
+  document.getElementById("lastUpdated").textContent = `Actualizado ${new Date().toLocaleTimeString()}`;
   render();
 }
 
@@ -93,7 +98,7 @@ function attachModuleHandlers() {
 
 async function createTask(event) {
   event.preventDefault();
-  await fetch("/api/tasks", {
+  const response = await fetch("/api/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -102,8 +107,16 @@ async function createTask(event) {
       parameters: {},
     }),
   });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    alert(error.detail || "No se pudo solicitar la revision.");
+    return;
+  }
+  const result = await response.json();
   await loadDashboard();
-  alert("Revision solicitada. El agente la ejecutara automaticamente cuando haga su proxima conexion.");
+  alert(result.deduplicated
+    ? "Ya existia una revision equivalente pendiente; no se creo un duplicado."
+    : "Revision solicitada. El agente la ejecutara en su proxima conexion.");
 }
 
 async function askAiFromForm(event) {
@@ -122,7 +135,7 @@ async function askAi(question) {
     body: JSON.stringify({ question }),
   });
   if (!response.ok) {
-    answer.textContent = "No se pudo consultar el Analista IA.";
+    answer.textContent = "No se pudo consultar el analista de evidencia.";
     return;
   }
   const data = await response.json();
@@ -183,3 +196,7 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 ensureSession().then((ok) => {
   if (ok) loadDashboard();
 });
+
+setInterval(() => {
+  if (!document.hidden) loadDashboard();
+}, 60_000);

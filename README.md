@@ -7,9 +7,22 @@ Prototipo funcional para detectar configuraciones inseguras en equipos Windows a
 - API FastAPI con autenticacion por token de agente.
 - Base de datos SQLite local en `data/cybercheck.db`.
 - Motor de reglas para cortafuegos, RDP, servicios, administradores, actualizaciones, antivirus y respaldos.
-- Panel web para equipos, hallazgos, evidencias, tareas de verificacion y reportes.
+- Panel web para equipos, hallazgos, evidencias y tareas de verificacion.
 - Agente Python para Windows con tareas cerradas: `FULL_SCAN`, `VERIFY_FIREWALL`, `VERIFY_PORTS`, `VERIFY_SERVICES`, `VERIFY_ADMINISTRATORS`, `VERIFY_UPDATES`, `VERIFY_ANTIVIRUS`, `VERIFY_DEVICES`, `VERIFY_BACKUP`.
 - Base V2.1 incremental: modulos de agente, inventario avanzado, controles de seguridad, software instalado, procesos con metadata segura, eventos de seguridad permitidos, snapshots y cambios historicos.
+
+## Estado del producto
+
+La version actual es un piloto `0.3` de una sola organizacion. El agente usa una
+lista cerrada de verificaciones; ninguna IA ejecuta comandos en los equipos.
+Incluye ejecucion silenciosa con `pythonw.exe`, bloqueo contra procesos
+solapados, tareas con lease e identificador idempotente, y estados parciales
+cuando una consulta no produjo evidencia suficiente.
+
+La integracion Wazuh incluida es todavia un cliente de lectura y laboratorio;
+no se activa solamente definiendo variables de entorno. El aislamiento entre
+varias empresas, instalador autocontenido firmado y sincronizacion Wazuh de
+extremo a extremo son trabajo posterior al piloto.
 
 ## Instalacion
 
@@ -50,6 +63,7 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=elige-una-contrasena-segura
 SESSION_SECRET=un-texto-largo-aleatorio
 AGENT_REGISTRATION_CODE=codigo-largo-para-registrar-agentes
+CYBERCHECK_ENV=production
 ```
 
 Si `DATABASE_URL` existe, la app usa PostgreSQL. Si no existe, usa SQLite local en `data/cybercheck.db`.
@@ -87,24 +101,67 @@ py -3.12 agent/windows_agent.py --config agent/agent_config.render.json --regist
 py -3.12 agent/windows_agent.py --config agent/agent_config.render.json --scan FULL_SCAN
 ```
 
-Para instalar una tarea programada que consulte verificaciones pendientes cada 15 minutos:
+Para instalar una tarea programada silenciosa que consulte verificaciones cada
+5 minutos en una estacion de trabajo con usuario conectado:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1
 ```
 
-Si Windows niega permisos porque ya existe una tarea elevada, instala una tarea de usuario con otro nombre:
+El instalador usa `pythonw.exe`, oculta la tarea, evita instancias paralelas y
+elimina la tarea heredada `CyberCheck MIPYME Agent User`. No crees tareas con
+nombres alternativos porque quedarían dos agentes ejecutándose.
+
+Para una VM o servidor que debe funcionar antes del inicio de sesion, abre
+PowerShell como administrador e instala la tarea bajo `SYSTEM`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1 -TaskName "CyberCheck MIPYME Agent User"
+powershell -ExecutionPolicy Bypass -File agent/install_scheduled_task.ps1 -RunAsSystem
 ```
 
-Para instalarla con privilegios elevados, abre PowerShell como administrador y agrega `-RunElevated`.
+La opcion `-RunElevated` mantiene el modo interactivo del usuario y solo debe
+usarse para pruebas. Para equipos empresariales y VMs se recomienda
+`-RunAsSystem`.
+
+### Instalacion autocontenida para piloto empresarial
+
+Para no depender de Python en cada equipo, genera primero el ejecutable sin
+consola. PyInstaller solo es una dependencia de compilacion y no se instala en
+los endpoints:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-agent-build.txt
+powershell -ExecutionPolicy Bypass -File agent/build_standalone.ps1 -PythonExe .venv\Scripts\python.exe
+```
+
+Despues, desde PowerShell como administrador:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File agent/install_enterprise_agent.ps1
+```
+
+Esto copia el binario a `Program Files`, guarda configuración, token y logs en
+`ProgramData` con ACL para Administradores/SYSTEM, y registra una unica tarea
+oculta bajo `SYSTEM`. Para desinstalar conservando datos:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File agent/uninstall_enterprise_agent.ps1
+```
+
+Agrega `-RemoveData` únicamente si también deseas eliminar configuración,
+token y logs.
+
+La API publica dos comprobaciones operativas:
+
+```text
+GET /health/live   proceso disponible
+GET /health/ready  base de datos disponible
+```
 
 ## Pruebas
 
 ```powershell
-py -3.12 -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 ## Alcance de seguridad

@@ -4,7 +4,10 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health/ready
     envVars:
+      - key: CYBERCHECK_ENV
+        value: production
       - key: DATABASE_URL
         sync: false
       - key: ADMIN_USERNAME

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -76,6 +77,14 @@ class SecurityTest(unittest.TestCase):
         self.assertEqual(blocked.status_code, 429)
         self.assertIn("Retry-After", blocked.headers)
 
+    def test_login_is_rate_limited(self):
+        for _ in range(main.LOGIN_ATTEMPT_LIMIT):
+            failed = self.client.post("/api/login", json={"username": "admin", "password": "incorrect"})
+            self.assertEqual(failed.status_code, 401)
+        blocked = self.client.post("/api/login", json={"username": "admin", "password": "admin123"})
+        self.assertEqual(blocked.status_code, 429)
+        self.assertIn("Retry-After", blocked.headers)
+
     def test_cross_site_mutation_is_rejected_without_blocking_panel(self):
         self.assertEqual(self.client.post("/api/login", json={"username": "admin", "password": "admin123"}).status_code, 200)
         cross_site = self.client.post("/api/ai/company-chat", headers={"Origin": "https://evil.example"}, json={"question": "Estado actual"})
@@ -116,6 +125,40 @@ class SecurityTest(unittest.TestCase):
     def test_development_session_secret_is_separate_from_admin_password(self):
         self.assertNotEqual(main._session_secret(), main._admin_password())
         self.assertEqual(main._session_secret(), main._session_secret())
+
+    def test_existing_database_gets_task_and_idempotency_columns(self):
+        legacy_path = Path(self.directory.name) / "legacy-schema.db"
+        legacy_db = sqlite3.connect(legacy_path)
+        try:
+            db = legacy_db
+            db.executescript("""
+                CREATE TABLE scans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL,
+                    scan_type TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
+                CREATE TABLE tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL,
+                    task_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    parameters_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    delivered_at TEXT,
+                    completed_at TEXT
+                );
+            """)
+            db.commit()
+        finally:
+            legacy_db.close()
+        with patch.object(storage, "DB_PATH", legacy_path):
+            storage.init_db()
+            with storage.connect() as db:
+                scan_columns = set(storage.table_columns(db, "scans"))
+                task_columns = set(storage.table_columns(db, "tasks"))
+        self.assertTrue({"request_id", "task_id"}.issubset(scan_columns))
+        self.assertTrue({"delivery_attempts", "last_error", "result_scan_id"}.issubset(task_columns))
 
 
 if __name__ == "__main__":

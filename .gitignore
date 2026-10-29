@@ -4,3 +4,6 @@ __pycache__/
 data/*.db
 data/*.db-*
 agent/agent_config.render.json
+agent/.*.lock
+tmp/
+dist/

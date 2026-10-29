@@ -1,9 +1,12 @@
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot "agent_config.render.json"),
     [string]$PythonExe = "",
+    [string]$AgentExecutable = "",
     [string]$TaskName = "CyberCheck MIPYME Agent",
     [ValidateRange(1, 1440)][int]$IntervalMinutes = 5,
     [switch]$RunElevated,
+    [switch]$RunAsSystem,
+    [bool]$MigrateLegacyTasks = $true,
     [switch]$ValidateOnly
 )
 
@@ -72,34 +75,75 @@ function Resolve-PythonWindowless([string]$RequestedExecutable) {
     throw "No se encontro Python 3.10+ con pythonw.exe. Instala Python o pasa -PythonExe con su ruta completa."
 }
 
-$agentPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "windows_agent.py")).Path
 $configFullPath = (Resolve-Path -LiteralPath $ConfigPath).Path
-$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
-$pythonw = Resolve-PythonWindowless $PythonExe
 $account = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-# Las rutas Windows no pueden contener comillas. Las comillas externas conservan espacios.
-$arguments = '"{0}" --config "{1}" --poll-once --max-tasks 10' -f $agentPath, $configFullPath
-$action = New-ScheduledTaskAction -Execute $pythonw -Argument $arguments -WorkingDirectory $projectRoot
+if ($RunAsSystem) {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principalCheck = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    if (-not $principalCheck.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw "-RunAsSystem requiere abrir PowerShell como administrador."
+    }
+}
+
+if ($AgentExecutable) {
+    $agentCommand = Resolve-ApplicationPath $AgentExecutable
+    $workingDirectory = Split-Path -Parent $agentCommand
+    $arguments = '--config "{0}" --poll-once --max-tasks 10' -f $configFullPath
+    $runtimeLabel = $agentCommand
+} else {
+    $agentPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "windows_agent.py")).Path
+    $workingDirectory = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+    $agentCommand = Resolve-PythonWindowless $PythonExe
+    # Las rutas Windows no pueden contener comillas. Las comillas externas conservan espacios.
+    $arguments = '"{0}" --config "{1}" --poll-once --max-tasks 10' -f $agentPath, $configFullPath
+    $runtimeLabel = $agentCommand
+}
+$action = New-ScheduledTaskAction -Execute $agentCommand -Argument $arguments -WorkingDirectory $workingDirectory
 $firstRun = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
-$onLogon = New-ScheduledTaskTrigger -AtLogOn -User $account
-$runLevel = if ($RunElevated) { "Highest" } else { "Limited" }
-$principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel $runLevel
+$triggers = @($firstRun)
+if ($RunAsSystem) {
+    $triggers += New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $runIdentity = "NT AUTHORITY\SYSTEM"
+} else {
+    $triggers += New-ScheduledTaskTrigger -AtLogOn -User $account
+    $runLevel = if ($RunElevated) { "Highest" } else { "Limited" }
+    $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel $runLevel
+    $runIdentity = $account
+}
 $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
-    -StartWhenAvailable
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -Hidden
 
 if (-not $ValidateOnly) {
     Register-ScheduledTask `
         -TaskName $TaskName `
         -Action $action `
-        -Trigger @($firstRun, $onLogon) `
+        -Trigger $triggers `
         -Principal $principal `
         -Settings $settings `
         -Description "Consulta tareas de CyberCheck y ejecuta verificaciones permitidas sin abrir consola." `
         -Force | Out-Null
+
+    if ($MigrateLegacyTasks) {
+        @("CyberCheck MIPYME Agent User") |
+            Where-Object { $_ -ne $TaskName } |
+            ForEach-Object {
+                if (Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue) {
+                    Stop-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue
+                    Unregister-ScheduledTask -TaskName $_ -Confirm:$false
+                    Write-Host "Tarea heredada eliminada: $_"
+                }
+            }
+    }
 }
 
 if ($ValidateOnly) {
@@ -107,6 +151,10 @@ if ($ValidateOnly) {
 } else {
     Write-Host "Tarea programada instalada: $TaskName"
 }
-Write-Host "Ejecutable sin ventana: $pythonw"
-Write-Host "Cuenta: $account"
-Write-Host "Frecuencia: cada $IntervalMinutes minutos y al iniciar sesion"
+Write-Host "Ejecutable sin ventana: $runtimeLabel"
+Write-Host "Cuenta: $runIdentity"
+if ($RunAsSystem) {
+    Write-Host "Frecuencia: cada $IntervalMinutes minutos y al iniciar Windows"
+} else {
+    Write-Host "Frecuencia: cada $IntervalMinutes minutos y al iniciar sesion"
+}

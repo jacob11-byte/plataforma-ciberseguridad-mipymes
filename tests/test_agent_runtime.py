@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,6 +63,78 @@ class AgentRuntimeTest(unittest.TestCase):
                 "name": "TermService", "status": "Running", "start_type": "Automatic", "running": True,
             }])
 
+    def test_partial_antivirus_failure_does_not_claim_zero_threats(self):
+        values = iter([
+            {
+                "AntivirusEnabled": True,
+                "RealTimeProtectionEnabled": True,
+                "OnAccessProtectionEnabled": True,
+                "BehaviorMonitorEnabled": True,
+                "IoavProtectionEnabled": True,
+            },
+            {"error": "Preference query denied"},
+            {"error": "Threat query denied"},
+            {"displayName": "Windows Defender", "productState": 1},
+        ])
+        with mock.patch.object(windows_agent, "os", SimpleNamespace(name="nt")), \
+             mock.patch.object(windows_agent, "run_powershell", side_effect=lambda *_args: next(values)):
+            result = windows_agent.collect_antivirus()
+        self.assertIsNone(result["active_threat_count"])
+        self.assertIsNone(result["threats"])
+        self.assertIn("threats", result["collection_errors"])
+        self.assertIn("preferences", result["collection_errors"])
+
+    def test_agent_config_requires_tls_outside_localhost(self):
+        windows_agent.validate_agent_config({
+            "api_url": "http://127.0.0.1:8000",
+            "registration_code": "dev-code",
+        })
+        with self.assertRaisesRegex(ValueError, "HTTPS"):
+            windows_agent.validate_agent_config({
+                "api_url": "http://server.example:8000",
+                "registration_code": "dev-code",
+            })
+
+    def test_instance_lock_rejects_overlapping_agent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "agent.json"
+            first = windows_agent.AgentInstanceLock(config_path)
+            second = windows_agent.AgentInstanceLock(config_path)
+            first.acquire()
+            try:
+                with self.assertRaises(windows_agent.AgentAlreadyRunning):
+                    second.acquire()
+            finally:
+                first.release()
+
+    def test_registered_config_discards_registration_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent.json"
+            config = {
+                "api_url": "https://server.example",
+                "device_id": "device-1",
+                "token": "token-1",
+                "registration_code": "enrollment-secret",
+            }
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with mock.patch.object(windows_agent, "register_device") as register:
+                windows_agent.ensure_registered(config, path)
+            register.assert_not_called()
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("registration_code", stored)
+
+    def test_http_client_retries_transient_timeout(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok": true}'
+        with mock.patch.object(
+            windows_agent.urllib.request,
+            "urlopen",
+            side_effect=[TimeoutError("cold start"), response],
+        ) as urlopen, mock.patch.object(windows_agent.time, "sleep"):
+            result = windows_agent.request_json("GET", "https://server.example/health", "token")
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(urlopen.call_count, 2)
+
     def test_poll_once_does_not_send_duplicate_heartbeat(self):
         config = {"api_url": "http://127.0.0.1:8000", "device_id": "dev1", "token": "secret"}
         with mock.patch.object(sys, "argv", ["agent", "--poll-once"]), \
@@ -72,6 +145,23 @@ class AgentRuntimeTest(unittest.TestCase):
              mock.patch.object(windows_agent, "poll_once") as poll:
             self.assertEqual(windows_agent.main(), 0)
         heartbeat.assert_not_called()
+        poll.assert_called_once()
+
+    def test_main_accepts_utf8_bom_config_written_by_windows_tools(self):
+        config = {
+            "api_url": "http://127.0.0.1:8000",
+            "device_id": "dev1",
+            "token": "secret",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent.json"
+            path.write_text(json.dumps(config), encoding="utf-8-sig")
+            with mock.patch.object(
+                sys, "argv", ["agent", "--config", str(path), "--poll-once"]
+            ), mock.patch.object(windows_agent, "configure_logging"), \
+                 mock.patch.object(windows_agent, "ensure_registered"), \
+                 mock.patch.object(windows_agent, "poll_once") as poll:
+                self.assertEqual(windows_agent.main(), 0)
         poll.assert_called_once()
 
     def test_admin_allowlist_is_evidence_only_when_configured(self):
