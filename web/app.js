@@ -1,6 +1,7 @@
 import { dashboardModules, renderModule } from "/static/modules/dashboardModules.js";
 import { escapeHtml } from "/static/modules/utils.js";
 import { icon } from "/static/modules/icons.js";
+import { createTaskTracker } from "/static/modules/taskTracker.js";
 
 import { deviceHeartbeats, eventRows, isSerious } from "/static/modules/events.js";
 
@@ -224,27 +225,32 @@ function attachModuleHandlers() {
   });
 }
 
+// Requested reviews show a live progress card until the computer finishes.
+let tracker = null;
+
+function reviewResult(task) {
+  const device = (state.dashboard?.devices || []).find((item) => item.device_id === task.device_id);
+  if (!device || device.security_score == null) return "Los resultados ya están en el panel.";
+  return `Puntaje ${device.security_score}/100 · ${device.security_open_findings ?? 0} problema(s) por resolver.`;
+}
+
 async function createTask(event) {
   event.preventDefault();
-  const response = await fetch("/api/tasks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const button = event.target.querySelector("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    const result = await postJson("/api/tasks", {
       device_id: document.getElementById("deviceSelect").value,
       task_type: document.getElementById("taskType").value,
       parameters: {},
-    }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    alert(error.detail || "No se pudo solicitar la revision.");
-    return;
+    });
+    tracker?.watch(result.task_id);
+    await loadDashboard();
+  } catch (error) {
+    showDeviceNotice(`<span class="error">${escapeHtml(error.message || "No se pudo solicitar la revision.")}</span>`);
+  } finally {
+    if (button) button.disabled = false;
   }
-  const result = await response.json();
-  await loadDashboard();
-  alert(result.deduplicated
-    ? "Ya existia una revision equivalente pendiente; no se creo un duplicado."
-    : "Revision solicitada. El agente la ejecutara en su proxima conexion.");
 }
 
 async function askAiFromForm(event) {
@@ -474,6 +480,11 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 
 ensureSession().then((ok) => {
   if (!ok) return;
+  tracker = createTaskTracker({
+    onCompleted: () => loadDashboard(),
+    describeResult: reviewResult,
+    onViewProblems: () => { window.location.hash = "problemas"; },
+  });
   loadDashboard();
   pollLive();
   setInterval(() => {

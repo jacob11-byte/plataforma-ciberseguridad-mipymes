@@ -1111,6 +1111,94 @@ tr.kev-row { background: var(--bad-soft); }
   color: var(--ok);
 }
 
+/* ---------- Review progress cards ---------- */
+.task-tracker {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  display: grid;
+  gap: 12px;
+  width: min(400px, calc(100vw - 32px));
+}
+.task-tracker:empty { display: none; }
+.task-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: task-in .25s ease-out;
+}
+.task-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; }
+.task-heading { display: grid; gap: 1px; min-width: 0; }
+.task-title { font-size: 14px; overflow-wrap: anywhere; }
+.task-phase { color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+.task-time { color: var(--muted); font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; }
+.task-close {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.task-close:hover { background: var(--surface-3); color: var(--text); }
+
+.task-state { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; }
+.task-card.is-running .task-state {
+  border: 2.5px solid var(--primary-soft);
+  border-top-color: var(--primary);
+  animation: task-spin .8s linear infinite;
+}
+.task-card.is-done .task-state { background: var(--ok-line); }
+.task-card.is-done .task-state::after { content: ""; width: 9px; height: 5px; margin-top: -2px; border: solid #ffffff; border-width: 0 0 2.5px 2.5px; transform: rotate(-45deg); }
+.task-card.is-failed .task-state { background: var(--bad-line); }
+.task-card.is-failed .task-state::after { content: "!"; color: #ffffff; font-size: 13px; font-weight: 800; }
+
+.task-bar { position: relative; height: 8px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
+.task-bar > span {
+  position: relative;
+  display: block;
+  width: 2%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--teal), var(--primary));
+  transition: width 1s linear;
+}
+.task-card.is-running .task-bar > span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  animation: task-shimmer 1.6s ease-in-out infinite;
+}
+.task-card.is-indeterminate .task-bar > span { width: 35% !important; transition: none; animation: task-slide 1.6s ease-in-out infinite; }
+.task-card.is-done .task-bar > span { background: var(--ok-line); }
+.task-card.is-failed .task-bar > span { background: var(--bad-line); }
+
+.task-steps { display: flex; gap: 6px; margin: 0; padding: 0; color: var(--muted); font-size: 11.5px; list-style: none; }
+.task-steps li { display: flex; flex: 1; align-items: center; gap: 5px; min-width: 0; }
+.task-steps li::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.task-steps li.done { color: var(--text-2); }
+.task-steps li.done::before { background: var(--ok-line); }
+.task-steps li.current { color: var(--text); font-weight: 650; }
+.task-steps li.current::before { background: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.task-note { margin: 0; color: var(--warn); font-size: 12.5px; line-height: 1.4; }
+.task-card.is-failed .task-note { color: var(--bad); }
+.task-result { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.task-result p { margin: 0; color: var(--text-2); font-size: 13px; }
+
+@keyframes task-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes task-spin { to { transform: rotate(360deg); } }
+@keyframes task-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes task-slide { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
   .metric-score { grid-column: span 1; grid-template-columns: 1fr; justify-items: start; }
@@ -1152,6 +1240,7 @@ tr.kev-row { background: var(--bad-soft); }
   .fix-command { grid-template-columns: 1fr; }
   .login-panel { padding: 24px; }
   .panel { padding: 18px; }
+  .task-tracker { right: 12px; bottom: 12px; left: 12px; width: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

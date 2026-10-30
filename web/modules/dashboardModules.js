@@ -96,7 +96,7 @@ function taskFormHtml(devices) {
     <form id="taskForm">
       <select id="deviceSelect">${devices.map((d) => `<option value="${d.device_id}">${escapeHtml(d.name || d.hostname || d.device_id)}</option>`).join("")}</select>
       <select id="taskType">${Object.entries(taskLabels).map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join("")}</select>
-      <button type="submit">Solicitar revision</button>
+      <button type="submit">Solicitar revisión</button>
     </form>
   `;
 }

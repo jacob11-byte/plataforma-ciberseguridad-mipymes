@@ -1,6 +1,7 @@
 import { diagnosisBlock, findingTitle } from "/static/modules/findings.js";
 import { eventRows } from "/static/modules/events.js";
 import { icon } from "/static/modules/icons.js";
+import { createTaskTracker } from "/static/modules/taskTracker.js";
 
 const state = { detail: null, ai: null, tab: "resumen", live: { events: [], latestId: 0 } };
 const severityOrder = { Critico: 0, Alto: 1, Medio: 2, Bajo: 3 };
@@ -64,7 +65,7 @@ const statusLabels = {
 };
 
 const taskLabels = {
-  FULL_SCAN: "Revision completa",
+  FULL_SCAN: "Revisión completa",
   VERIFY_FIREWALL: "Revisar firewall",
   VERIFY_PORTS: "Revisar puertos",
   VERIFY_SERVICES: "Revisar servicios remotos",
@@ -146,6 +147,7 @@ async function ensureSession() {
   document.getElementById("reactivateBtn").hidden = !isAdmin;
   document.getElementById("disconnectBtn").hidden = !isAdmin;
   document.getElementById("deleteBtn").hidden = !isAdmin;
+  document.getElementById("scanBtn").hidden = !["technician", "admin"].includes(data.role);
   return true;
 }
 
@@ -636,6 +638,49 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
+// "Revisar ahora": a full review with a live progress card until it ends.
+const tracker = createTaskTracker({
+  onCompleted: () => loadDetail(),
+  describeResult: (task) => {
+    const summary = state.detail?.summary || {};
+    if (task.device_id !== deviceIdFromPath() || summary.security_score == null) return "Los resultados ya están en el panel.";
+    return `Puntaje ${summary.security_score}/100 · ${summary.open_findings ?? 0} problema(s) por resolver.`;
+  },
+  onViewProblems: (task) => {
+    if (task.device_id !== deviceIdFromPath()) {
+      window.location.href = `/devices/${encodeURIComponent(task.device_id)}`;
+      return;
+    }
+    state.tab = "hallazgos";
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  },
+});
+
+document.getElementById("scanBtn").addEventListener("click", async () => {
+  const button = document.getElementById("scanBtn");
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_id: deviceIdFromPath(), task_type: "FULL_SCAN", parameters: {} }),
+    });
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      alert(data.detail || "No se pudo solicitar la revision.");
+      return;
+    }
+    tracker.watch(data.task_id);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 document.getElementById("refreshBtn").addEventListener("click", loadDetail);
 document.getElementById("reportBtn").addEventListener("click", () => {

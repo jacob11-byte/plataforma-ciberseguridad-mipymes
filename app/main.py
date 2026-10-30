@@ -1650,6 +1650,50 @@ def create_task(payload: TaskRequest, request: Request) -> dict[str, Any]:
         return {"task_id": task_id, "status": "pending", "deduplicated": False}
 
 
+DEFAULT_TASK_SECONDS = {"FULL_SCAN": 150}
+
+
+@app.get("/api/tasks/{task_id}")
+def task_progress(task_id: int, request: Request) -> dict[str, Any]:
+    """Live state of one requested review, for the panel's progress bar."""
+    _require_user(request)
+    company_id = _company_id(request)
+    with connect() as db:
+        task = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="Revision no encontrada")
+        task = dict(task)
+        device = device_view(_company_device(db, task["device_id"], company_id))
+        previous = db.execute(
+            """
+            SELECT duration_ms FROM scans
+            WHERE device_id=? AND scan_type=? AND duration_ms IS NOT NULL
+            ORDER BY id DESC LIMIT 1
+            """,
+            (task["device_id"], task["task_type"]),
+        ).fetchone()
+    now = datetime.now(timezone.utc)
+
+    def seconds_since(value: Any) -> int | None:
+        moment = parse_timestamp(value)
+        return max(0, int((now - moment).total_seconds())) if moment else None
+
+    expected = round(previous["duration_ms"] / 1000) if previous else DEFAULT_TASK_SECONDS.get(task["task_type"], 40)
+    return {
+        "task_id": task["id"],
+        "task_type": task["task_type"],
+        "status": task["status"],
+        "device_id": task["device_id"],
+        "device_name": device.get("name") or device.get("hostname") or task["device_id"],
+        "agent_status": device["agent_status"],
+        "waiting_seconds": seconds_since(task["created_at"]),
+        "running_seconds": seconds_since(task["delivered_at"]) if task["status"] == "delivered" else None,
+        "finished_seconds": seconds_since(task["completed_at"]) if task["status"] in {"completed", "failed", "canceled"} else None,
+        "expected_seconds": max(5, expected),
+        "error": task["last_error"] if task["status"] == "failed" else None,
+    }
+
+
 @app.post("/api/devices/{device_id}/reconnect")
 def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
     _require_user(request, "technician")

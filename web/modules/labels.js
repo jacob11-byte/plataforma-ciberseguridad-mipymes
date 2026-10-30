@@ -1,5 +1,5 @@
 export const taskLabels = {
-  FULL_SCAN: "Revision completa",
+  FULL_SCAN: "Revisión completa",
   VERIFY_FIREWALL: "Revisar firewall",
   VERIFY_PORTS: "Revisar puertos",
   VERIFY_SERVICES: "Revisar servicios remotos",
@@ -13,7 +13,7 @@ export const taskLabels = {
   VERIFY_SOFTWARE: "Revisar programas instalados",
   VERIFY_PROCESSES: "Revisar procesos activos",
   VERIFY_EVENTLOG: "Revisar eventos de seguridad",
-  VERIFY_HARDENING: "Revisar endurecimiento (cuentas, contrasenas, exclusiones)",
+  VERIFY_HARDENING: "Revisar endurecimiento (cuentas, contraseñas, exclusiones)",
 };
 
 const statusLabels = {
