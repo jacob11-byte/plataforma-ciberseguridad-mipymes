@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell(powershell -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\jacob\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--pg2\\\\49d13093-4cec-4cd8-b6cd-40a0ddb4e8e5\\\\scratchpad\\\\msrc_e2e.ps1\" 2>&1 | ForEach-Object { \"$_\" } | Where-Object { $_ -notmatch \"^INFO:\" })",
-      "PowerShell(Set-Location C:\\\\pg2; Remove-Item \"$env:TEMP\\\\cybercheck-msrc.json\" -ErrorAction SilentlyContinue; .\\\\.venv\\\\Scripts\\\\python.exe -I \"C:\\\\Users\\\\jacob\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--pg2\\\\49d13093-4cec-4cd8-b6cd-40a0ddb4e8e5\\\\scratchpad\\\\msrc_time.py\" 3 2>&1 | ForEach-Object { \"$_\" })"
-    ]
-  }
-}

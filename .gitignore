@@ -8,3 +8,4 @@ agent/enrollment.json
 agent/.*.lock
 tmp/
 dist/
+.claude/
