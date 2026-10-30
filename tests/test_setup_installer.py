@@ -1,6 +1,9 @@
 import json
+import os
+import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from agent import setup_installer
@@ -56,6 +59,35 @@ class SetupInstallerTest(unittest.TestCase):
         existing = {"api_url": "https://old.example", "device_id": "dev", "token": "tok"}
         _config, reason = resolve_config(existing, ENROLLMENT, rejected=lambda _: self.fail("no check"))
         self.assertEqual(reason, "enroll")
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACLs")
+    def test_secure_directories_never_leaves_files_with_an_empty_acl(self):
+        def acl(path):
+            return subprocess.run(["icacls.exe", str(path)], capture_output=True, text=True, errors="replace").stdout
+
+        # The real installer runs elevated; here the current user stands in for
+        # the Administrators group so the admin-only folders stay readable.
+        me = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True).stdout
+        my_sid = me.strip().split(",")[-1].strip('"')
+        with tempfile.TemporaryDirectory() as directory, \
+             unittest.mock.patch.object(setup_installer, "SID_ADMINS", f"*{my_sid}"):
+            program, data = Path(directory) / "program", Path(directory) / "data"
+            (data / "logs").mkdir(parents=True)
+            program.mkdir()
+            (program / "svc.exe").write_text("x")
+            (data / "agent_config.json").write_text("{}")
+            (data / "logs" / "agent.log").write_text("x")
+            try:
+                setup_installer.secure_directories(program, data)
+                self.assertEqual((data / "logs" / "agent.log").read_text(), "x")
+                for item in (program / "svc.exe", data / "agent_config.json", data / "logs" / "agent.log"):
+                    self.assertIn("SYSTEM", acl(item), f"{item.name} lost its permissions: the service could not open it")
+                self.assertEqual((program / "svc.exe").read_text(), "x", "users must be able to run the binaries")
+                self.assertNotRegex(acl(data / "agent_config.json"), r"BUILTIN\\(Users|Usuarios)",
+                                    "standard users must not read the config and token")
+                self.assertIn("(RX)", acl(data / "public"))
+            finally:
+                subprocess.run(["icacls.exe", directory, "/reset", "/T", "/C", "/Q"], capture_output=True)
 
     def test_flags_accept_windows_and_unix_styles(self):
         self.assertEqual(parse_flags(["/Uninstall", "--quiet", "-PURGE"]), {"uninstall", "quiet", "purge"})

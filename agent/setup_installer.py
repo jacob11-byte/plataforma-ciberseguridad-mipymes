@@ -228,18 +228,28 @@ def reclaim(path: Path) -> None:
         run(["icacls.exe", str(path), "/reset", "/T", "/C", "/Q"], check=False)
 
 
+def restrict(path: Path, *grants: str) -> None:
+    """Replace a folder's ACL and make everything inside inherit it.
+
+    Never combine /inheritance:r with /T: it strips the inherited entries from
+    every file while the (OI)(CI) grants do not land on files, leaving them
+    with an empty ACL that not even SYSTEM can open ("Acceso denegado" when
+    the service starts).
+    """
+    run(["icacls.exe", str(path), "/inheritance:r", "/grant:r", *grants, "/C", "/Q"])
+    run(["icacls.exe", str(path / "*"), "/reset", "/T", "/C", "/Q"], check=False)
+
+
 def secure_directories(program_dir: Path, data_dir: Path) -> None:
     public_dir = data_dir / "public"
     public_dir.mkdir(parents=True, exist_ok=True)
-    run(["icacls.exe", str(program_dir), "/inheritance:r", "/grant:r",
-         f"{SID_SYSTEM}:(OI)(CI)F", f"{SID_ADMINS}:(OI)(CI)F", f"{SID_USERS}:(OI)(CI)RX", "/T", "/C", "/Q"])
+    restrict(program_dir, f"{SID_SYSTEM}:(OI)(CI)F", f"{SID_ADMINS}:(OI)(CI)F", f"{SID_USERS}:(OI)(CI)RX")
     # Config, token, offline queue and logs: SYSTEM and Administrators only.
-    run(["icacls.exe", str(data_dir), "/inheritance:r", "/grant:r",
-         f"{SID_SYSTEM}:(OI)(CI)F", f"{SID_ADMINS}:(OI)(CI)F", "/T", "/C", "/Q"])
-    # Users may traverse the root and read only the sanitized status.
+    restrict(data_dir, f"{SID_SYSTEM}:(OI)(CI)F", f"{SID_ADMINS}:(OI)(CI)F")
+    # Users may traverse the root (this entry is not inherited)...
     run(["icacls.exe", str(data_dir), "/grant", f"{SID_USERS}:(RX)", "/C", "/Q"])
-    run(["icacls.exe", str(public_dir), "/inheritance:r", "/grant:r",
-         f"{SID_SYSTEM}:(OI)(CI)F", f"{SID_ADMINS}:(OI)(CI)F", f"{SID_USERS}:(OI)(CI)RX", "/T", "/C", "/Q"])
+    # ...and read only the sanitized status.
+    restrict(public_dir, f"{SID_SYSTEM}:(OI)(CI)F", f"{SID_ADMINS}:(OI)(CI)F", f"{SID_USERS}:(OI)(CI)RX")
 
 
 def copy_components(source: Path, target: Path) -> None:

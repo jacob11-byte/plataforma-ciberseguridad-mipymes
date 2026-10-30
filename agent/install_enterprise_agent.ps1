@@ -60,17 +60,18 @@ if ($ReplaceConfig -or -not (Test-Path -LiteralPath $installedConfig)) {
 
 # Usuarios pueden ejecutar binarios y leer solo el estado publico. La
 # configuracion, token, cola offline y logs quedan limitados a SYSTEM/Admin.
-& icacls.exe $InstallRoot /inheritance:r /grant:r `
-    '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "No se pudo proteger $InstallRoot" }
-& icacls.exe $DataRoot /inheritance:r /grant:r `
-    '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "No se pudo proteger $DataRoot" }
-& icacls.exe $DataRoot /grant:r '*S-1-5-32-545:(RX)' | Out-Null
+# Nunca combinar /inheritance:r con /T: deja los archivos con permisos vacios
+# (ni SYSTEM puede abrirlos). Se fija la carpeta y su contenido hereda.
+function Restrict-Folder([string]$Path, [string[]]$Grants) {
+    & icacls.exe $Path /inheritance:r /grant:r @Grants /C /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo proteger $Path" }
+    & icacls.exe (Join-Path $Path '*') /reset /T /C /Q 2>$null | Out-Null
+}
+Restrict-Folder $InstallRoot @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-32-545:(OI)(CI)RX')
+Restrict-Folder $DataRoot @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F')
+& icacls.exe $DataRoot /grant '*S-1-5-32-545:(RX)' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "No se pudo permitir acceso al estado publico" }
-& icacls.exe $publicRoot /inheritance:r /grant:r `
-    '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' /T /C | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "No se pudo publicar el estado del agente" }
+Restrict-Folder $publicRoot @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-32-545:(OI)(CI)RX')
 
 $serviceCommand = '"{0}" --config "{1}" --interval {2} --max-tasks 10 --service-name "{3}"' -f `
     $installedService, $installedConfig, $IntervalSeconds, $ServiceName
