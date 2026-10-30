@@ -134,6 +134,7 @@ async function ensureSession() {
   const isAdmin = data.role === "admin";
   document.getElementById("reactivateBtn").hidden = !isAdmin;
   document.getElementById("disconnectBtn").hidden = !isAdmin;
+  document.getElementById("deleteBtn").hidden = !isAdmin;
   return true;
 }
 
@@ -650,6 +651,21 @@ document.getElementById("disconnectBtn").addEventListener("click", async () => {
     alert(error.detail || "No se pudo desconectar el agente.");
   }
   await loadDetail();
+});
+document.getElementById("deleteBtn").addEventListener("click", async () => {
+  const name = state.detail?.device?.name || "este equipo";
+  if (!window.confirm(`Eliminar "${name}" del sistema? Se borraran sus problemas, revisiones y eventos. Esta accion no se puede deshacer.`)) return;
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceIdFromPath())}`, { method: "DELETE" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    alert(error.detail || "No se pudo eliminar la computadora.");
+    return;
+  }
+  window.location.href = "/";
 });
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });

@@ -6,6 +6,7 @@ import { eventRows, isSerious } from "/static/modules/events.js";
 const state = {
   dashboard: null, ai: null, user: null, users: null, audit: null, install: null, activeModule: "computadoras",
   live: { events: [], latestId: 0, unseen: 0 },
+  deviceNotice: null,
 };
 
 // Live feed: poll only for events newer than the last one seen.
@@ -143,6 +144,9 @@ function attachModuleHandlers() {
   document.querySelectorAll(".disconnect-btn").forEach((button) => {
     button.addEventListener("click", () => disconnectDevice(button.dataset.deviceId));
   });
+  document.querySelectorAll(".delete-btn").forEach((button) => {
+    button.addEventListener("click", () => deleteDevice(button.dataset.deviceId, button.dataset.deviceName));
+  });
   document.querySelectorAll(".reactivate-btn").forEach((button) => {
     button.addEventListener("click", () => reactivateDevice(button.dataset.deviceId));
   });
@@ -152,6 +156,7 @@ function attachModuleHandlers() {
   const addDeviceBtn = document.getElementById("addDeviceBtn");
   if (addDeviceBtn) addDeviceBtn.addEventListener("click", downloadInstaller);
   if (state.install) renderInstallNotice();
+  renderDeviceNotice();
   const userForm = document.getElementById("userForm");
   if (userForm) userForm.addEventListener("submit", createUser);
   document.querySelectorAll(".user-role").forEach((select) => {
@@ -222,47 +227,59 @@ async function askAi(question) {
   answer.innerHTML = `<strong>Respuesta:</strong> ${escapeHtml(data.answer)}${refs ? `<div class="muted">Respaldado por: ${escapeHtml(refs)}</div>` : ""}`;
 }
 
-async function reconnectDevice(deviceId) {
+// Device action results live in state so dashboard re-renders keep them.
+function showDeviceNotice(html) {
+  state.deviceNotice = html;
+  renderDeviceNotice();
+}
+
+function renderDeviceNotice() {
   const notice = document.getElementById("reconnectNotice");
+  if (!notice || !state.deviceNotice) return;
   notice.hidden = false;
-  notice.innerHTML = "Revisando reconexion...";
-  const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/reconnect`, { method: "POST" });
-  if (response.status === 401) {
-    window.location.href = "/login";
-    return;
+  notice.innerHTML = state.deviceNotice;
+}
+
+async function deviceAction(path, method = "POST") {
+  try {
+    return await postJson(path, undefined, method);
+  } catch (error) {
+    showDeviceNotice(`<span class="error">${escapeHtml(error.message)}</span>`);
+    return null;
   }
-  const data = await response.json();
-  const commands = (data.commands || []).map((command) => `<pre>${escapeHtml(command)}</pre>`).join("");
-  notice.innerHTML = `<strong>Reconectar agente</strong><p>${escapeHtml(data.message || "Ejecuta el comando en el equipo del agente.")}</p>${commands}`;
+}
+
+async function reconnectDevice(deviceId) {
+  showDeviceNotice("Revisando la conexion...");
+  const data = await deviceAction(`/api/devices/${encodeURIComponent(deviceId)}/reconnect`);
+  if (!data) return;
+  const steps = (data.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("");
+  showDeviceNotice(`<strong>${data.agent_status === "online" ? "Agente conectado" : "Estado de la conexion"}</strong><p>${escapeHtml(data.message || "")}</p>${steps ? `<ol class="install-steps">${steps}</ol>` : ""}`);
+}
+
+async function deleteDevice(deviceId, name) {
+  if (!window.confirm(`Eliminar "${name}" del sistema? Se borraran sus problemas, revisiones y eventos. Esta accion no se puede deshacer.`)) return;
+  showDeviceNotice("Eliminando computadora...");
+  const data = await deviceAction(`/api/devices/${encodeURIComponent(deviceId)}`, "DELETE");
+  if (!data) return;
+  showDeviceNotice(`<strong>Computadora eliminada</strong><p>${escapeHtml(data.message)}</p>`);
   await loadDashboard();
 }
 
 async function disconnectDevice(deviceId) {
   if (!window.confirm("Desconectar este agente? El token quedara desactivado y se cancelaran solicitudes pendientes.")) return;
-  const notice = document.getElementById("reconnectNotice");
-  notice.hidden = false;
-  notice.innerHTML = "Desconectando agente...";
-  const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/disconnect`, { method: "POST" });
-  if (response.status === 401) {
-    window.location.href = "/login";
-    return;
-  }
-  const data = await response.json();
-  notice.innerHTML = `<strong>Agente desconectado</strong><p>${escapeHtml(data.message || "El agente fue desconectado.")}</p>`;
+  showDeviceNotice("Desconectando agente...");
+  const data = await deviceAction(`/api/devices/${encodeURIComponent(deviceId)}/disconnect`);
+  if (!data) return;
+  showDeviceNotice(`<strong>Agente desconectado</strong><p>${escapeHtml(data.message)}</p>`);
   await loadDashboard();
 }
 
 async function reactivateDevice(deviceId) {
-  const notice = document.getElementById("reconnectNotice");
-  notice.hidden = false;
-  notice.innerHTML = "Reactivando agente...";
-  const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/reactivate`, { method: "POST" });
-  if (response.status === 401) {
-    window.location.href = "/login";
-    return;
-  }
-  const data = await response.json();
-  notice.innerHTML = `<strong>Agente reactivado</strong><p>${escapeHtml(data.message || "El agente fue reactivado.")}</p>`;
+  showDeviceNotice("Reactivando agente...");
+  const data = await deviceAction(`/api/devices/${encodeURIComponent(deviceId)}/reactivate`);
+  if (!data) return;
+  showDeviceNotice(`<strong>Agente reactivado</strong><p>${escapeHtml(data.message)}</p>`);
   await loadDashboard();
 }
 

@@ -97,6 +97,7 @@ function deviceActions(device, user) {
     actions.push(`<button class="small secondary rotate-btn" data-device-id="${id}">Rotar credencial</button>`);
     actions.push(`<button class="small secondary reactivate-btn" data-device-id="${id}">Reactivar</button>`);
     actions.push(`<button class="small danger disconnect-btn" data-device-id="${id}">Desconectar</button>`);
+    actions.push(`<button class="small danger delete-btn" data-device-id="${id}" data-device-name="${escapeHtml(device.name || device.hostname || device.device_id)}">Eliminar</button>`);
   }
   return actions.length ? `<div class="row-actions">${actions.join("")}</div>` : `<span class="muted">Solo lectura</span>`;
 }
@@ -259,6 +260,7 @@ const auditLabels = {
   "task.create": "Revision solicitada",
   "device.register": "Equipo registrado",
   "device.disconnect": "Equipo desconectado",
+  "device.delete": "Equipo eliminado",
   "device.reactivate": "Equipo reactivado",
   "device.rotation_requested": "Rotacion de credencial solicitada",
   "device.credential_rotated": "Credencial del agente renovada",

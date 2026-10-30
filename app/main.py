@@ -1536,19 +1536,26 @@ def reconnect_device(device_id: str, request: Request) -> dict[str, Any]:
     _require_user(request, "technician")
     with connect() as db:
         view = device_view(_company_device(db, device_id, _company_id(request)))
+    if view["agent_status"] == "online":
+        return {
+            "device_id": device_id, "agent_status": "online", "agent_status_label": view["agent_status_label"],
+            "message": "El agente esta conectado y reportando con normalidad.", "steps": [], "commands": [],
+        }
     return {
         "device_id": device_id,
         "agent_status": view["agent_status"],
         "agent_status_label": view["agent_status_label"],
-        "can_remote_start": False,
         "message": (
-            "El servidor no puede iniciar un programa dentro de Windows si el agente esta desconectado. "
-            "Ejecuta uno de estos comandos en la computadora del agente para forzar la reconexion."
+            f"Ultimo contacto: {view.get('last_seen') or 'nunca'}. El agente se reconecta solo cuando el equipo "
+            "esta encendido y con Internet; Windows reinicia el servicio si se detiene. Si no vuelve:"
         ),
-        "commands": [
-            "Restart-Service -Name CyberCheckAgent",
-            "Get-Content \"$env:ProgramData\\CyberCheck\\public\\status.json\"",
+        "steps": [
+            "Verifica que la computadora este encendida y conectada a Internet.",
+            "Si el equipo se reinstalo o se le borro el agente, pulsa 'Agregar computadora' y ejecuta el instalador "
+            "en ese equipo: conserva o renueva su registro automaticamente.",
+            "Si el equipo ya no existe, eliminalo del panel con el boton 'Eliminar'.",
         ],
+        "commands": [],
     }
 
 
@@ -1612,6 +1619,39 @@ def reactivate_device(device_id: str, request: Request) -> dict[str, Any]:
         "device_id": device_id,
         "status": "active",
         "message": "Agente reactivado. El token existente puede volver a enviar heartbeat y evidencia.",
+    }
+
+
+# Child rows first: SQLite enforces these foreign keys.
+DEVICE_TABLES = (
+    "evidences", "snapshot_diffs", "inventory_snapshots", "tasks", "scans", "device_events",
+    "security_alerts", "device_group_members", "policy_assignments", "agent_credentials",
+)
+
+
+@app.delete("/api/devices/{device_id}")
+def delete_device(device_id: str, request: Request) -> dict[str, Any]:
+    """Remove a device and all of its history (findings, scans, evidence, events)."""
+    actor = _require_user(request, "admin")
+    company_id = _company_id(request)
+    with connect() as db:
+        device = _company_device(db, device_id, company_id)
+        db.execute(
+            "DELETE FROM history WHERE finding_id IN (SELECT id FROM findings WHERE device_id=?)", (device_id,)
+        )
+        db.execute("DELETE FROM findings WHERE device_id=?", (device_id,))
+        for table in DEVICE_TABLES:
+            db.execute(f"DELETE FROM {table} WHERE device_id=?", (device_id,))
+        db.execute("DELETE FROM devices WHERE device_id=?", (device_id,))
+        audit(db, actor, "device.delete", target_type="device", target_id=device_id,
+              details={"hostname": device.get("hostname") or device.get("name")},
+              source=_client_hash(request), company_id=company_id)
+    _event_email_last.pop(device_id, None)
+    return {
+        "device_id": device_id,
+        "status": "deleted",
+        "message": "Computadora eliminada con todo su historial. Si el agente sigue instalado en ese equipo, "
+                   "desinstalalo desde Configuracion > Aplicaciones; ya no puede enviar datos.",
     }
 
 
