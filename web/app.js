@@ -1,5 +1,6 @@
 import { dashboardModules, renderModule } from "/static/modules/dashboardModules.js";
 import { escapeHtml } from "/static/modules/utils.js";
+import { icon } from "/static/modules/icons.js";
 
 import { deviceHeartbeats, eventRows, isSerious } from "/static/modules/events.js";
 
@@ -42,8 +43,13 @@ async function ensureSession() {
     return false;
   }
   state.user = await response.json();
-  const company = state.user.company_name ? ` - ${state.user.company_name}` : "";
-  document.getElementById("currentUser").textContent = `${state.user.username} (${state.user.role_label || state.user.role})${company}`;
+  const role = state.user.role_label || state.user.role;
+  const company = state.user.company_name || "";
+  document.getElementById("currentUser").innerHTML = `<strong>${escapeHtml(state.user.username)}</strong><span>${escapeHtml([role, company].filter(Boolean).join(" · "))}</span>`;
+  document.getElementById("userAvatar").textContent = (company || state.user.username || "?").trim().charAt(0) || "?";
+  if (company) document.getElementById("pageEyebrow").textContent = company;
+  const fromHash = window.location.hash.slice(1);
+  if (dashboardModules(state.user).some(([id]) => id === fromHash)) state.activeModule = fromHash;
   return true;
 }
 
@@ -101,30 +107,66 @@ function render() {
   renderActiveModule();
 }
 
+const moduleIcons = {
+  computadoras: "monitor", envivo: "activity", analista: "chat", estado: "shield", problemas: "alert",
+  revisiones: "search", historial: "history", tareas: "tasks", usuarios: "users", auditoria: "audit",
+};
+
+function gradeFor(score) {
+  if (score == null) return null;
+  return score >= 90 ? "A" : score >= 75 ? "B" : score >= 60 ? "C" : score >= 40 ? "D" : "F";
+}
+
+const gradeWords = { A: "Muy bien protegido", B: "Bien, con detalles por mejorar", C: "Regular: hay cosas importantes por corregir", D: "En riesgo", F: "En alto riesgo" };
+
+function metricCard(label, value, iconName, tone, hot = false) {
+  return `<div class="metric tone-${tone}${hot ? " is-hot" : ""}">
+    <div class="metric-top"><span class="metric-label">${escapeHtml(label)}</span><i class="metric-icon">${icon(iconName)}</i></div>
+    <strong>${escapeHtml(value)}</strong>
+  </div>`;
+}
+
 function renderMetrics() {
   const { devices, findings, scans, summary } = state.dashboard;
   const openFindings = findings.filter((finding) => finding.status !== "resolved");
   const metrics = summary || {};
-  document.getElementById("metrics").innerHTML = [
-    ["Puntaje de seguridad", metrics.security_score == null ? "-" : `${metrics.security_score}/100`],
-    ["Computadoras", metrics.devices ?? devices.length],
-    ["Conectadas ahora", metrics.online_devices ?? 0],
-    ["Problemas por resolver", metrics.open_findings ?? openFindings.length],
-    ["Urgentes (hoy)", metrics.critical ?? 0],
-    ["Importantes (esta semana)", metrics.high ?? 0],
-    ["Revisar pronto", metrics.medium ?? 0],
-    ["Ya corregidos", metrics.resolved ?? 0],
-    ["Revisiones", scans.length],
-  ].map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+  const score = metrics.security_score;
+  const grade = gradeFor(score);
+  const scoreCard = `<div class="metric metric-score">
+    <div class="score-ring ${grade ? `ring-${grade}` : ""}" style="--value:${Number(score) || 0}"><span>${grade || "-"}</span></div>
+    <div>
+      <span class="metric-label">Puntaje de seguridad</span>
+      <strong>${score == null ? "-" : `${escapeHtml(score)}/100`}</strong>
+      <span class="metric-hint">${grade ? escapeHtml(gradeWords[grade]) : "Aún sin revisiones completas"}</span>
+    </div>
+  </div>`;
+  const critical = metrics.critical ?? 0;
+  document.getElementById("metrics").innerHTML = scoreCard + [
+    ["Computadoras", metrics.devices ?? devices.length, "monitor", "primary"],
+    ["Conectadas ahora", metrics.online_devices ?? 0, "wifi", "ok"],
+    ["Problemas por resolver", metrics.open_findings ?? openFindings.length, "flag", "primary"],
+    ["Urgentes (hoy)", critical, "octagon", "bad", critical > 0],
+    ["Importantes (esta semana)", metrics.high ?? 0, "alert", "warn"],
+    ["Revisar pronto", metrics.medium ?? 0, "info", "info"],
+    ["Ya corregidos", metrics.resolved ?? 0, "check", "ok"],
+    ["Revisiones", scans.length, "search", "neutral"],
+  ].map(([label, value, iconName, tone, hot]) => metricCard(label, value, iconName, tone, hot)).join("");
 }
 
 function renderModuleTabs() {
-  document.getElementById("moduleTabs").innerHTML = dashboardModules(state.user).map(([id, label]) => `
-    <button class="tab ${state.activeModule === id ? "active" : ""}" data-module="${id}">${escapeHtml(label)}${id === "envivo" && state.live.unseen ? ` <span class="tab-alert">${state.live.unseen}</span>` : ""}</button>
+  const modules = dashboardModules(state.user);
+  document.getElementById("moduleTabs").innerHTML = modules.map(([id, label]) => `
+    <button class="tab ${state.activeModule === id ? "active" : ""}" data-module="${id}">${icon(moduleIcons[id])}<span>${escapeHtml(label)}</span>${id === "envivo" && state.live.unseen ? `<span class="tab-alert">${state.live.unseen}</span>` : ""}</button>
   `).join("");
+  const active = modules.find(([id]) => id === state.activeModule);
+  if (active) {
+    document.getElementById("pageTitle").textContent = active[1];
+    document.title = `${active[1]} - CyberCheck MIPYME`;
+  }
   document.querySelectorAll("[data-module]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.activeModule = button.dataset.module;
+      history.replaceState(null, "", `#${state.activeModule}`);
       if (state.activeModule === "envivo") state.live.unseen = 0;
       renderActiveModule();
       renderModuleTabs();

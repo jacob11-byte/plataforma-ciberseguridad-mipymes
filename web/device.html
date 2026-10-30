@@ -4,48 +4,71 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Detalle del equipo - CyberCheck MIPYME</title>
+  <script src="/static/modules/theme.js"></script>
+  <link rel="icon" href="/static/brand/shield.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Montserrat:wght@600;700;800&display=swap">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body class="device-page">
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark">CC</span>
-      <div>
-      <a href="/" class="back-link">Volver al panel</a>
-      <h1 id="deviceTitle">Equipo</h1>
-      <p id="deviceSubtitle">Detalle de seguridad de esta computadora</p>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="sidebar-brand" href="/" aria-label="CyberCheck MIPYME - inicio">
+        <img class="brand-logo" src="/static/brand/shield.svg" alt="">
+        <span><span class="wordmark">Cyber<b>Check</b></span><span class="wordmark-sub">MIPYME</span></span>
+      </a>
+      <a href="/" class="side-back">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>Volver al panel
+      </a>
+      <nav class="side-nav" id="tabs" aria-label="Secciones del equipo"></nav>
+      <div class="sidebar-foot">
+        <div class="user-chip">
+          <span class="avatar" id="userAvatar">·</span>
+          <span class="user-meta" id="currentUser"></span>
+        </div>
+        <div class="sidebar-actions">
+          <button type="button" class="ghost-btn theme-toggle" data-theme-toggle title="Cambiar entre modo claro y oscuro">
+            <span class="when-light"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>Oscuro</span>
+            <span class="when-dark"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>Claro</span>
+          </button>
+          <button id="logoutBtn" type="button" class="ghost-btn">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>Salir
+          </button>
+        </div>
       </div>
-    </div>
-    <div class="topbar-actions">
-      <span id="currentUser" class="muted"></span>
-      <button id="refreshBtn">Actualizar</button>
-      <button id="reportBtn" class="secondary">Informe PDF</button>
-      <button id="reactivateBtn" class="secondary">Reactivar</button>
-      <button id="disconnectBtn" class="danger">Desconectar</button>
-      <button id="deleteBtn" class="danger">Eliminar</button>
-      <button id="logoutBtn" class="secondary">Salir</button>
-    </div>
-  </header>
+    </aside>
 
-  <main class="device-main">
-    <section class="hero-panel compact">
-      <div>
-        <span class="eyebrow">Detalle del equipo</span>
-        <h2>Auditoria visual del endpoint</h2>
-        <p>Controles, evidencias, inventario, cambios y estado del agente en un solo lugar.</p>
-      </div>
-      <div class="hero-status">
-        <span class="pulse"></span>
-        <strong>Datos reales</strong>
-        <small>Ultima evidencia almacenada</small>
-      </div>
-    </section>
-    <section class="metrics" id="deviceMetrics"></section>
-    <section class="panel">
-      <div class="tabs" id="tabs"></div>
-      <div id="tabContent" class="tab-content"></div>
-    </section>
-  </main>
+    <div class="app-main">
+      <header class="topbar">
+        <div class="page-heading">
+          <span class="eyebrow">Detalle del equipo</span>
+          <h1 id="deviceTitle">Equipo</h1>
+          <p id="deviceSubtitle">Detalle de seguridad de esta computadora</p>
+        </div>
+        <div class="topbar-actions">
+          <button id="refreshBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>Actualizar
+          </button>
+          <button id="reportBtn" type="button" class="secondary">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></svg>Informe PDF
+          </button>
+          <button id="reactivateBtn" type="button" class="secondary">Reactivar</button>
+          <button id="disconnectBtn" type="button" class="secondary danger">Desconectar</button>
+          <button id="deleteBtn" type="button" class="danger">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>Eliminar
+          </button>
+        </div>
+      </header>
+
+      <main class="content device-main">
+        <section class="metrics" id="deviceMetrics"></section>
+        <section class="panel">
+          <div id="tabContent" class="tab-content"></div>
+        </section>
+      </main>
+    </div>
+  </div>
 
   <script type="module" src="/static/device.js"></script>
 </body>

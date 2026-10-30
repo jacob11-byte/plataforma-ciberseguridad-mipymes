@@ -114,7 +114,7 @@ export function findingCard(finding, evidence, deviceName = "") {
   const technicalExtras = `<p class="muted">Se da por corregido cuando: ${escapeHtml(finding.closure_criteria)}</p>${renderEvidence(evidence)}`;
   const diagnosis = diagnosisBlock(finding, technicalExtras);
   return `
-    <article class="finding ${finding.status === "resolved" ? "is-resolved" : ""}">
+    <article class="finding sev-${escapeHtml(finding.severity)} ${finding.status === "resolved" ? "is-resolved" : ""}">
       <div class="finding-head">
         <strong>${escapeHtml(findingTitle(finding))}</strong>
         <span class="badge ${finding.status}">${statusLabel(finding.status)}</span>

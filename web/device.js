@@ -1,34 +1,43 @@
 import { diagnosisBlock, findingTitle } from "/static/modules/findings.js";
 import { eventRows } from "/static/modules/events.js";
+import { icon } from "/static/modules/icons.js";
 
 const state = { detail: null, ai: null, tab: "resumen", live: { events: [], latestId: 0 } };
 const severityOrder = { Critico: 0, Alto: 1, Medio: 2, Bajo: 3 };
 
-const tabs = [
-  ["resumen", "Resumen"],
-  ["vulnerabilidades", "Vulnerabilidades"],
-  ["envivo", "Actividad en vivo"],
-  ["analista", "Analista de evidencia"],
-  ["sistema", "Informacion del equipo"],
-  ["inventario", "Inventario"],
-  ["firewall", "Firewall"],
-  ["puertos", "Puertos"],
-  ["servicios", "Servicios remotos"],
-  ["administradores", "Administradores"],
-  ["updates", "Actualizaciones"],
-  ["antivirus", "Antivirus"],
-  ["amenazas", "Amenazas"],
-  ["backups", "Respaldos"],
-  ["dispositivos", "Dispositivos"],
-  ["software", "Programas"],
-  ["procesos", "Procesos"],
-  ["eventlog", "Registro de seguridad"],
-  ["endurecimiento", "Endurecimiento"],
-  ["detecciones", "Detecciones"],
-  ["cambios", "Cambios"],
-  ["hallazgos", "Problemas"],
-  ["evidencias", "Evidencias tecnicas"],
-  ["historial", "Historial"],
+const tabGroups = [
+  ["General", [
+    ["resumen", "Resumen", "gauge"],
+    ["hallazgos", "Problemas", "alert"],
+    ["vulnerabilidades", "Vulnerabilidades", "bug"],
+    ["envivo", "Actividad en vivo", "activity"],
+    ["analista", "Analista de evidencia", "chat"],
+  ]],
+  ["Protección", [
+    ["firewall", "Firewall", "brick"],
+    ["antivirus", "Antivirus", "shield"],
+    ["amenazas", "Amenazas", "octagon"],
+    ["updates", "Actualizaciones", "download"],
+    ["backups", "Respaldos", "database"],
+    ["endurecimiento", "Endurecimiento", "lock"],
+    ["detecciones", "Detecciones", "eye"],
+  ]],
+  ["Equipo", [
+    ["sistema", "Informacion del equipo", "monitor"],
+    ["inventario", "Inventario", "box"],
+    ["software", "Programas", "grid"],
+    ["procesos", "Procesos", "cpu"],
+    ["puertos", "Puertos", "network"],
+    ["servicios", "Servicios remotos", "server"],
+    ["administradores", "Administradores", "key"],
+    ["dispositivos", "Dispositivos", "usb"],
+  ]],
+  ["Registros", [
+    ["eventlog", "Registro de seguridad", "audit"],
+    ["cambios", "Cambios", "diff"],
+    ["evidencias", "Evidencias tecnicas", "code"],
+    ["historial", "Historial", "history"],
+  ]],
 ];
 
 const statusLabels = {
@@ -129,7 +138,9 @@ async function ensureSession() {
     return false;
   }
   const data = await response.json();
-  document.getElementById("currentUser").textContent = `${data.username} (${data.role_label || data.role})`;
+  const role = data.role_label || data.role;
+  document.getElementById("currentUser").innerHTML = `<strong>${escapeHtml(data.username)}</strong><span>${escapeHtml([role, data.company_name].filter(Boolean).join(" · "))}</span>`;
+  document.getElementById("userAvatar").textContent = (data.company_name || data.username || "?").trim().charAt(0) || "?";
   // Device credential actions are admin-only; the API enforces it too.
   const isAdmin = data.role === "admin";
   document.getElementById("reactivateBtn").hidden = !isAdmin;
@@ -160,25 +171,30 @@ function render() {
   const { device, summary } = state.detail;
   document.getElementById("deviceTitle").textContent = device.name || device.hostname || device.device_id;
   document.getElementById("deviceSubtitle").textContent = `${device.windows_edition || device.os_version || "Sistema no evaluado"} - ${device.agent_status_label || "Sin conexion"}`;
+  const scoreTone = { A: "ok", B: "ok", C: "warn", D: "bad", F: "bad" }[summary.security_grade] || "primary";
   document.getElementById("deviceMetrics").innerHTML = [
-    ["Puntaje de seguridad", summary.security_score == null ? "No evaluado" : `${summary.security_score}/100 (${summary.security_grade})`],
-    ["Ultima conexion", summary.last_heartbeat || "No evaluado"],
-    ["Version del agente", summary.agent_version || "No evaluado"],
-    ["Ultima revision completa", summary.last_full_scan?.created_at || "No evaluado"],
-    ["Duracion", formatDuration(summary.last_scan_duration_ms)],
-    ["Modulos correctos", valueOrNA(summary.modules_success)],
-    ["Modulos error", valueOrNA(summary.modules_error)],
-    ["Controles correctos", summary.controls_pass],
-    ["Problemas abiertos", summary.open_findings],
-  ].map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+    ["Puntaje de seguridad", summary.security_score == null ? "No evaluado" : `${summary.security_score}/100 (${summary.security_grade})`, "shield", scoreTone],
+    ["Ultima conexion", summary.last_heartbeat || "No evaluado", "wifi", "primary"],
+    ["Version del agente", summary.agent_version || "No evaluado", "box", "neutral"],
+    ["Ultima revision completa", summary.last_full_scan?.created_at || "No evaluado", "search", "primary"],
+    ["Duracion", formatDuration(summary.last_scan_duration_ms), "clock", "neutral"],
+    ["Modulos correctos", valueOrNA(summary.modules_success), "check", "ok"],
+    ["Modulos error", valueOrNA(summary.modules_error), "alert", Number(summary.modules_error) > 0 ? "warn" : "neutral"],
+    ["Controles correctos", summary.controls_pass, "shield", "ok"],
+    ["Problemas abiertos", summary.open_findings, "flag", Number(summary.open_findings) > 0 ? "bad" : "ok"],
+  ].map(([label, value, iconName, tone]) => `<div class="metric tone-${tone}"><div class="metric-top"><span class="metric-label">${escapeHtml(label)}</span><i class="metric-icon">${icon(iconName)}</i></div><strong>${escapeHtml(value)}</strong></div>`).join("");
 
-  document.getElementById("tabs").innerHTML = tabs.map(([id, label]) => `
-    <button class="tab ${state.tab === id ? "active" : ""}" data-tab="${id}">${escapeHtml(label)}</button>
+  document.getElementById("tabs").innerHTML = tabGroups.map(([group, items]) => `
+    <div class="nav-group">${escapeHtml(group)}</div>
+    ${items.map(([id, label, iconName]) => `
+      <button class="tab ${state.tab === id ? "active" : ""}" data-tab="${id}">${icon(iconName)}<span>${escapeHtml(label)}</span></button>
+    `).join("")}
   `).join("");
-  document.querySelectorAll(".tab").forEach((button) => {
+  document.querySelectorAll("#tabs .tab").forEach((button) => {
     button.addEventListener("click", () => {
       state.tab = button.dataset.tab;
       render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
     });
   });
   document.getElementById("tabContent").innerHTML = renderTab();
@@ -438,7 +454,7 @@ function renderDevices(data) {
 function renderFindings(rows) {
   const ordered = [...openFindingsBySeverity(rows), ...rows.filter((finding) => finding.status === "resolved")];
   return ordered.length ? `<div class="findings">${ordered.map((finding) => `
-    <article class="finding ${finding.status === "resolved" ? "is-resolved" : ""}">
+    <article class="finding sev-${escapeHtml(finding.severity)} ${finding.status === "resolved" ? "is-resolved" : ""}">
       <div class="finding-head"><strong>${escapeHtml(findingTitle(finding))}</strong><span class="badge ${finding.status}">${escapeHtml(labelValue(finding.status))}</span></div>
       ${diagnosisBlock(finding, `<p class="muted">Se da por corregido cuando: ${escapeHtml(finding.closure_criteria)} (regla ${escapeHtml(finding.rule_id)})</p>`)
         || `<p>${escapeHtml(finding.recommendation)}</p>`}

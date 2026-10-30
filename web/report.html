@@ -4,11 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Informe de seguridad - CyberCheck</title>
+  <link rel="icon" href="/static/brand/shield.svg" type="image/svg+xml">
   <style>
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
     body { margin: 0; background: #eef2f7; color: #172033; font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
-    .toolbar { position: sticky; top: 0; display: flex; gap: 10px; justify-content: flex-end; padding: 10px 24px; background: #0f2a3d; }
+    .toolbar { position: sticky; top: 0; display: flex; gap: 10px; justify-content: flex-end; padding: 10px 24px; background: linear-gradient(90deg, #0c2856, #0d4f78); }
+    .report-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 1px solid #e3e9f1; font: 800 18px/1 Montserrat, "Segoe UI", sans-serif; color: #0c2856; }
+    .report-brand img { width: 34px; height: 34px; }
+    .report-brand b { color: #17b3c8; }
+    .report-brand small { margin-left: 4px; font-size: 10px; font-weight: 600; letter-spacing: .4em; color: #64748b; }
     .toolbar button { border: 0; border-radius: 8px; padding: 9px 16px; font-weight: 700; background: #ffffff; color: #0f2a3d; cursor: pointer; }
     .sheet { max-width: 860px; margin: 24px auto; padding: 40px 48px; background: #ffffff; box-shadow: 0 6px 24px rgba(15, 42, 61, .12); }
     h1 { margin: 0; font-size: 26px; }
@@ -100,6 +105,7 @@
       const issues = detail.collection_issues || [];
       document.title = `Informe ${device.name || device.hostname} - CyberCheck`;
       document.getElementById("sheet").innerHTML = `
+        <div class="report-brand"><img src="/static/brand/shield.svg" alt=""><span>Cyber<b>Check</b></span><small>MIPYME</small></div>
         <div class="head">
           <div>
             <div class="muted">${esc(me.company_name || "CyberCheck MIPYME")} · Informe de seguridad</div>

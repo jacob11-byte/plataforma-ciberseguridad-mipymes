@@ -528,47 +528,52 @@ def _db_time(db: Any, value: datetime) -> Any:
     return value if db.is_postgres else value.strftime("%Y-%m-%d %H:%M:%S")
 
 
+# The panel's own pages, CSS and JS must never be served stale after a deploy: browsers
+# revalidate every load (cheap 304 thanks to ETag/Last-Modified).
+REVALIDATE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/")
 def index(request: Request):
     if not _read_session(request):
         return RedirectResponse("/login", status_code=302)
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(WEB_DIR / "index.html", headers=REVALIDATE)
 
 
 @app.get("/devices/{device_id}")
 def device_page(device_id: str, request: Request):
     if not _read_session(request):
         return RedirectResponse("/login", status_code=302)
-    return FileResponse(WEB_DIR / "device.html")
+    return FileResponse(WEB_DIR / "device.html", headers=REVALIDATE)
 
 
 @app.get("/devices/{device_id}/report")
 def device_report_page(device_id: str, request: Request):
     if not _read_session(request):
         return RedirectResponse("/login", status_code=302)
-    return FileResponse(WEB_DIR / "report.html")
+    return FileResponse(WEB_DIR / "report.html", headers=REVALIDATE)
 
 
 @app.get("/reset")
 def reset_page() -> FileResponse:
-    return FileResponse(WEB_DIR / "reset.html")
+    return FileResponse(WEB_DIR / "reset.html", headers=REVALIDATE)
 
 
 @app.get("/login")
 def login_page(request: Request):
     if _read_session(request):
         return RedirectResponse("/", status_code=302)
-    return FileResponse(WEB_DIR / "login.html")
+    return FileResponse(WEB_DIR / "login.html", headers=REVALIDATE)
 
 
 @app.get("/static/styles.css")
 def styles() -> FileResponse:
-    return FileResponse(WEB_DIR / "styles.css", media_type="text/css")
+    return FileResponse(WEB_DIR / "styles.css", media_type="text/css", headers=REVALIDATE)
 
 
 @app.get("/static/app.js")
 def script() -> FileResponse:
-    return FileResponse(WEB_DIR / "app.js", media_type="application/javascript")
+    return FileResponse(WEB_DIR / "app.js", media_type="application/javascript", headers=REVALIDATE)
 
 
 @app.get("/static/modules/{filename}")
@@ -578,12 +583,24 @@ def module_script(filename: str) -> FileResponse:
     path = WEB_DIR / "modules" / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="Modulo no encontrado")
-    return FileResponse(path, media_type="application/javascript")
+    return FileResponse(path, media_type="application/javascript", headers=REVALIDATE)
 
 
 @app.get("/static/device.js")
 def device_script() -> FileResponse:
-    return FileResponse(WEB_DIR / "device.js", media_type="application/javascript")
+    return FileResponse(WEB_DIR / "device.js", media_type="application/javascript", headers=REVALIDATE)
+
+
+BRAND_MEDIA_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg"}
+
+
+@app.get("/static/brand/{filename}")
+def brand_asset(filename: str) -> FileResponse:
+    path = WEB_DIR / "brand" / filename
+    media_type = BRAND_MEDIA_TYPES.get(path.suffix.lower())
+    if "/" in filename or "\\" in filename or not media_type or not path.is_file():
+        raise HTTPException(status_code=404, detail="Recurso no encontrado")
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.post("/api/login")
@@ -2168,13 +2185,9 @@ def prune_device_history(db: Any, device_id: str) -> None:
 
 
 @app.get("/favicon.ico")
-def favicon() -> Response:
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" '
-        'fill="#176b87"/><text x="16" y="22" font-family="Arial" font-size="15" font-weight="700" '
-        'text-anchor="middle" fill="#fff">CC</text></svg>'
-    )
-    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+def favicon() -> FileResponse:
+    return FileResponse(WEB_DIR / "brand" / "shield.svg", media_type="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 def maybe_store_snapshot(db: Any, device_id: str, scan_id: int, evidence: dict[str, Any]) -> None:

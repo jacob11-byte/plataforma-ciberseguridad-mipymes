@@ -3,34 +3,69 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Nueva contrasena - CyberCheck MIPYME</title>
+  <title>Nueva contraseña - CyberCheck MIPYME</title>
+  <script src="/static/modules/theme.js"></script>
+  <link rel="icon" href="/static/brand/shield.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Montserrat:wght@600;700;800&display=swap">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body class="login-page">
-  <main class="login-shell">
-    <section class="login-panel">
-      <div class="brand login-brand">
-        <span class="brand-mark">CC</span>
+<body class="auth-page login-page">
+  <div class="auth-layout">
+    <section class="auth-showcase" aria-label="CyberCheck MIPYME">
+      <img class="showcase-logo" src="/static/brand/cybercheck-logo.jpg" alt="CyberCheck MIPYME - Seguridad Digital para tu Empresa" width="1024" height="559">
+      <div class="showcase-dark">
+        <img class="brand-logo" src="/static/brand/shield.svg" alt="">
         <div>
-          <h1>Nueva contrasena</h1>
-          <p>Elige una contrasena de 12 o mas caracteres.</p>
+          <span class="wordmark">Cyber<b>Check</b></span>
+          <span class="wordmark-sub">MIPYME</span>
+          <span class="showcase-tagline">Seguridad Digital para tu Empresa</span>
         </div>
       </div>
-      <form id="resetForm" class="login-form">
-        <label>
-          Contrasena nueva
-          <input id="password" type="password" autocomplete="new-password" required minlength="12">
-        </label>
-        <label>
-          Repite la contrasena
-          <input id="confirm" type="password" autocomplete="new-password" required minlength="12">
-        </label>
-        <button type="submit">Guardar contrasena</button>
-      </form>
-      <p id="message" class="error" hidden></p>
-      <a id="toLogin" href="/login" hidden>Ir a iniciar sesion</a>
+      <div class="showcase-copy">
+        <h2>Protege las computadoras de tu empresa sin ser experto</h2>
+        <ul class="showcase-points">
+          <li><span class="icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></span><span><strong>Revisión automática</strong>Cada computadora se revisa sola y te dice qué está mal, en palabras simples.</span></li>
+          <li><span class="icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span><span><strong>Vigilancia en tiempo real</strong>Avisos al momento: contraseñas atacadas, memorias USB, virus y más.</span></li>
+          <li><span class="icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span><span><strong>Soluciones paso a paso</strong>Arregla cada problema tú mismo, sin depender de un técnico.</span></li>
+        </ul>
+      </div>
     </section>
-  </main>
+
+    <main class="auth-main">
+      <div class="auth-corner">
+        <button type="button" class="secondary theme-toggle" data-theme-toggle title="Cambiar entre modo claro y oscuro">
+          <span class="when-light"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>Modo oscuro</span>
+          <span class="when-dark"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>Modo claro</span>
+        </button>
+      </div>
+
+      <section class="login-panel">
+        <div class="brand login-brand">
+          <img class="brand-logo" src="/static/brand/shield.svg" alt="">
+          <span><span class="wordmark">Cyber<b>Check</b></span><span class="wordmark-sub">MIPYME</span></span>
+        </div>
+        <div class="login-head">
+          <h1>Nueva contraseña</h1>
+          <p>Elige una contraseña de 12 o más caracteres.</p>
+        </div>
+        <form id="resetForm" class="login-form">
+          <label>
+            Contraseña nueva
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><input id="password" type="password" autocomplete="new-password" required minlength="12"></span>
+          </label>
+          <label>
+            Repite la contraseña
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><input id="confirm" type="password" autocomplete="new-password" required minlength="12"></span>
+          </label>
+          <button type="submit">Guardar contraseña</button>
+        </form>
+        <p id="message" class="error" hidden></p>
+        <a id="toLogin" href="/login" hidden>Ir a iniciar sesión</a>
+      </section>
+    </main>
+  </div>
   <script>
     const message = document.getElementById("message");
     const token = new URLSearchParams(location.search).get("token") || "";
@@ -41,13 +76,13 @@
     }
     if (!token) {
       document.getElementById("resetForm").hidden = true;
-      show("El enlace no es valido. Solicita uno nuevo desde la pantalla de inicio de sesion.");
+      show("El enlace no es válido. Solicita uno nuevo desde la pantalla de inicio de sesión.");
       document.getElementById("toLogin").hidden = false;
     }
     document.getElementById("resetForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       if (document.getElementById("password").value !== document.getElementById("confirm").value) {
-        show("Las contrasenas no coinciden.");
+        show("Las contraseñas no coinciden.");
         return;
       }
       const response = await fetch("/api/password/reset", {
@@ -58,11 +93,11 @@
       const data = response ? await response.json().catch(() => ({})) : {};
       if (response && response.ok) {
         document.getElementById("resetForm").hidden = true;
-        show("Contrasena actualizada. Ya puedes iniciar sesion.", true);
+        show("Contraseña actualizada. Ya puedes iniciar sesión.", true);
         document.getElementById("toLogin").hidden = false;
       } else {
-        const detail = Array.isArray(data.detail) ? "Revisa la contrasena ingresada." : data.detail;
-        show(detail || "No se pudo actualizar la contrasena.");
+        const detail = Array.isArray(data.detail) ? "Revisa la contraseña ingresada." : data.detail;
+        show(detail || "No se pudo actualizar la contraseña.");
       }
     });
   </script>

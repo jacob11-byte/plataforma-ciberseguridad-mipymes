@@ -3,81 +3,115 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Iniciar sesion - CyberCheck MIPYME</title>
+  <title>Iniciar sesión - CyberCheck MIPYME</title>
+  <script src="/static/modules/theme.js"></script>
+  <link rel="icon" href="/static/brand/shield.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Montserrat:wght@600;700;800&display=swap">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body class="login-page">
-  <main class="login-shell">
-    <section class="login-panel">
-      <div>
-        <div class="brand login-brand">
-          <span class="brand-mark">CC</span>
-          <div>
-            <h1>CyberCheck MIPYME</h1>
-            <p>Seguridad de las computadoras de tu empresa, en un solo panel.</p>
-          </div>
+<body class="auth-page login-page">
+  <div class="auth-layout">
+    <section class="auth-showcase" aria-label="CyberCheck MIPYME">
+      <img class="showcase-logo" src="/static/brand/cybercheck-logo.jpg" alt="CyberCheck MIPYME - Seguridad Digital para tu Empresa" width="1024" height="559">
+      <div class="showcase-dark">
+        <img class="brand-logo" src="/static/brand/shield.svg" alt="">
+        <div>
+          <span class="wordmark">Cyber<b>Check</b></span>
+          <span class="wordmark-sub">MIPYME</span>
+          <span class="showcase-tagline">Seguridad Digital para tu Empresa</span>
         </div>
       </div>
+      <div class="showcase-copy">
+        <h2>Protege las computadoras de tu empresa sin ser experto</h2>
+        <ul class="showcase-points">
+          <li><span class="icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></span><span><strong>Revisión automática</strong>Cada computadora se revisa sola y te dice qué está mal, en palabras simples.</span></li>
+          <li><span class="icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span><span><strong>Vigilancia en tiempo real</strong>Avisos al momento: contraseñas atacadas, memorias USB, virus y más.</span></li>
+          <li><span class="icon-wrap"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span><span><strong>Soluciones paso a paso</strong>Arregla cada problema tú mismo, sin depender de un técnico.</span></li>
+        </ul>
+      </div>
+    </section>
 
-      <div class="auth-tabs" role="tablist">
-        <button type="button" class="tab active" data-auth-tab="login" role="tab">Iniciar sesion</button>
-        <button type="button" class="tab" data-auth-tab="signup" role="tab" id="signupTab">Crear cuenta</button>
+    <main class="auth-main">
+      <div class="auth-corner">
+        <button type="button" class="secondary theme-toggle" data-theme-toggle title="Cambiar entre modo claro y oscuro">
+          <span class="when-light"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>Modo oscuro</span>
+          <span class="when-dark"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>Modo claro</span>
+        </button>
       </div>
 
-      <a id="googleBtn" class="google-btn" href="/auth/google/start" hidden>
-        <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
-          <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/>
-          <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.7 6c4.5-4.2 6.9-10.3 6.9-17.7z"/>
-          <path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/>
-          <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.7-6c-2.2 1.5-5 2.3-8.2 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/>
-        </svg>
-        Continuar con Google
-      </a>
-      <p id="googleDivider" class="auth-divider" hidden><span>o con tu correo</span></p>
+      <section class="login-panel">
+        <div class="brand login-brand">
+          <img class="brand-logo" src="/static/brand/shield.svg" alt="">
+          <span><span class="wordmark">Cyber<b>Check</b></span><span class="wordmark-sub">MIPYME</span></span>
+        </div>
+        <div class="login-head">
+          <h1>Bienvenido</h1>
+          <p>Seguridad de las computadoras de tu empresa, en un solo panel.</p>
+        </div>
 
-      <form id="loginForm" class="login-form">
-        <label>
-          Correo o usuario
-          <input id="username" name="username" autocomplete="username" required>
-        </label>
-        <label>
-          Contrasena
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-        </label>
-        <button type="submit">Iniciar sesion</button>
-        <button type="button" id="forgotLink" class="link-btn" hidden>Olvide mi contrasena</button>
-      </form>
+        <div class="auth-tabs" role="tablist">
+          <button type="button" class="tab active" data-auth-tab="login" role="tab">Iniciar sesión</button>
+          <button type="button" class="tab" data-auth-tab="signup" role="tab" id="signupTab">Crear cuenta</button>
+        </div>
 
-      <form id="forgotForm" class="login-form" hidden>
-        <p class="muted">Escribe tu correo y te enviaremos un enlace para elegir una contrasena nueva.</p>
-        <label>
-          Correo
-          <input id="forgotEmail" type="email" autocomplete="email" required>
-        </label>
-        <button type="submit">Enviar enlace</button>
-        <button type="button" id="forgotBack" class="link-btn">Volver</button>
-      </form>
+        <a id="googleBtn" class="google-btn" href="/auth/google/start" hidden>
+          <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
+            <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/>
+            <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.7 6c4.5-4.2 6.9-10.3 6.9-17.7z"/>
+            <path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/>
+            <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.7-6c-2.2 1.5-5 2.3-8.2 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/>
+          </svg>
+          Continuar con Google
+        </a>
+        <p id="googleDivider" class="auth-divider" hidden><span>o con tu correo</span></p>
 
-      <form id="signupForm" class="login-form" hidden>
-        <label>
-          Nombre de tu empresa
-          <input id="signupCompany" autocomplete="organization" required minlength="2" maxlength="120">
-        </label>
-        <label>
-          Correo
-          <input id="signupEmail" type="email" autocomplete="email" required>
-        </label>
-        <label>
-          Contrasena (minimo 12 caracteres)
-          <input id="signupPassword" type="password" autocomplete="new-password" required minlength="12">
-        </label>
-        <button type="submit">Crear cuenta</button>
-        <p class="muted">Cada cuenta es una empresa independiente: solo tu equipo vera sus computadoras.</p>
-      </form>
+        <form id="loginForm" class="login-form">
+          <label>
+            Correo o usuario
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><input id="username" name="username" autocomplete="username" placeholder="tu@empresa.com" required></span>
+          </label>
+          <label>
+            Contraseña
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" class="reveal" data-reveal="password">Mostrar</button></span>
+          </label>
+          <button type="submit">Iniciar sesión</button>
+          <button type="button" id="forgotLink" class="link-btn" hidden>Olvidé mi contraseña</button>
+        </form>
 
-      <p id="authError" class="error" hidden></p>
-    </section>
-  </main>
+        <form id="forgotForm" class="login-form" hidden>
+          <p class="muted">Escribe tu correo y te enviaremos un enlace para elegir una contraseña nueva.</p>
+          <label>
+            Correo
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg><input id="forgotEmail" type="email" autocomplete="email" placeholder="tu@empresa.com" required></span>
+          </label>
+          <button type="submit">Enviar enlace</button>
+          <button type="button" id="forgotBack" class="link-btn">Volver</button>
+        </form>
+
+        <form id="signupForm" class="login-form" hidden>
+          <label>
+            Nombre de tu empresa
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="20" x="4" y="2" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/></svg><input id="signupCompany" autocomplete="organization" placeholder="Mi Empresa S.A." required minlength="2" maxlength="120"></span>
+          </label>
+          <label>
+            Correo
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg><input id="signupEmail" type="email" autocomplete="email" placeholder="tu@empresa.com" required></span>
+          </label>
+          <label>
+            Contraseña (mínimo 12 caracteres)
+            <span class="field"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><input id="signupPassword" type="password" autocomplete="new-password" required minlength="12"><button type="button" class="reveal" data-reveal="signupPassword">Mostrar</button></span>
+          </label>
+          <button type="submit">Crear cuenta</button>
+          <p class="muted">Cada cuenta es una empresa independiente: solo tu equipo verá sus computadoras.</p>
+        </form>
+
+        <p id="authError" class="error" hidden></p>
+        <p class="auth-foot">CyberCheck MIPYME · Seguridad Digital para tu Empresa</p>
+      </section>
+    </main>
+  </div>
   <script>
     const errorBox = document.getElementById("authError");
     function showError(message) {
@@ -120,6 +154,14 @@
     });
     document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
       tab.addEventListener("click", () => selectTab(tab.dataset.authTab));
+    });
+    document.querySelectorAll("[data-reveal]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const input = document.getElementById(button.dataset.reveal);
+        const show = input.type === "password";
+        input.type = show ? "text" : "password";
+        button.textContent = show ? "Ocultar" : "Mostrar";
+      });
     });
 
     const params = new URLSearchParams(window.location.search);

@@ -4,46 +4,62 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CyberCheck MIPYME</title>
+  <script src="/static/modules/theme.js"></script>
+  <link rel="icon" href="/static/brand/shield.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Montserrat:wght@600;700;800&display=swap">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body class="dashboard-page">
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark">CC</span>
-      <div>
-      <h1>CyberCheck MIPYME</h1>
-      <p>Panel de seguridad para computadoras Windows.</p>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="sidebar-brand" href="/" aria-label="CyberCheck MIPYME - inicio">
+        <img class="brand-logo" src="/static/brand/shield.svg" alt="">
+        <span><span class="wordmark">Cyber<b>Check</b></span><span class="wordmark-sub">MIPYME</span></span>
+      </a>
+      <div class="nav-label">Menú</div>
+      <nav class="side-nav" id="moduleTabs" aria-label="Secciones del panel"></nav>
+      <div class="sidebar-foot">
+        <div class="user-chip">
+          <span class="avatar" id="userAvatar">·</span>
+          <span class="user-meta" id="currentUser"></span>
+        </div>
+        <div class="sidebar-actions">
+          <button type="button" class="ghost-btn theme-toggle" data-theme-toggle title="Cambiar entre modo claro y oscuro">
+            <span class="when-light"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>Oscuro</span>
+            <span class="when-dark"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>Claro</span>
+          </button>
+          <button id="logoutBtn" type="button" class="ghost-btn">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>Salir
+          </button>
+        </div>
       </div>
+    </aside>
+
+    <div class="app-main">
+      <header class="topbar">
+        <div class="page-heading">
+          <span class="eyebrow" id="pageEyebrow">Consola de seguridad</span>
+          <h1 id="pageTitle">Computadoras</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="live-pill"><span class="pulse"></span>Monitoreo activo</span>
+          <span id="lastUpdated" class="muted">Sin actualizar</span>
+          <button id="refreshBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>Actualizar
+          </button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="metrics" id="metrics"></section>
+        <section class="panel module-shell">
+          <div id="moduleContent" class="tab-content"></div>
+        </section>
+      </main>
     </div>
-    <div class="topbar-actions">
-      <span id="currentUser" class="muted"></span>
-      <span id="lastUpdated" class="muted">Sin actualizar</span>
-      <button id="refreshBtn">Actualizar</button>
-      <button id="logoutBtn" class="secondary">Salir</button>
-    </div>
-  </header>
-
-  <main>
-    <section class="hero-panel">
-      <div>
-        <span class="eyebrow">Consola de seguridad</span>
-        <h2>Postura según la última evidencia recibida</h2>
-        <p>Estado centralizado de computadoras, agente, problemas abiertos y revisiones recientes.</p>
-      </div>
-      <div class="hero-status">
-        <span class="pulse"></span>
-        <strong>Monitoreo activo</strong>
-        <small>Evidencia enviada por el agente Windows</small>
-      </div>
-    </section>
-
-    <section class="metrics" id="metrics"></section>
-
-    <section class="panel module-shell">
-      <div class="tabs module-tabs" id="moduleTabs"></div>
-      <div id="moduleContent" class="tab-content"></div>
-    </section>
-  </main>
+  </div>
 
   <script type="module" src="/static/app.js"></script>
 </body>
