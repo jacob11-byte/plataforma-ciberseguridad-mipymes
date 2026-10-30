@@ -33,7 +33,11 @@ const FRIENDLY = {
   }[d.event_id] || "Aviso del antivirus", ""],
   process_unsigned_user_path: (d) => [`Se abrió un programa sospechoso: ${d.name || "?"}`, "No tiene la firma de su fabricante y está en una carpeta personal. Si no lo reconoces, avisa a tu técnico."],
   new_listening_port: (d) => [`Un programa abrió una entrada desde la red (${d.port})`, `${d.process || "Un programa"} ahora acepta conexiones desde otras computadoras.`],
-  usb_connected: (d) => ["Se conectó una memoria USB", d.model ? `${d.model}. Si no es de la empresa, no abras sus archivos.` : ""],
+  usb_connected: (d) => [
+    d.already_connected ? "Hay una memoria USB conectada" : "Se conectó una memoria USB",
+    d.model ? `${d.model}. Si no es de la empresa, no abras sus archivos.` : "",
+  ],
+  usb_disconnected: (d) => ["Se desconectó una memoria USB", d.model || ""],
 };
 
 export function friendlyEvent(event) {

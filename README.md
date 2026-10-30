@@ -45,6 +45,25 @@ instancias de 512 MB muy justas). Esto detecta vulnerabilidades **conocidas y
 catalogadas**; no es un escaner de vulnerabilidades completo (no prueba
 servicios ni configuraciones de aplicaciones de terceros fuera de la base).
 
+### Actualizacion automatica del agente
+
+Cada equipo se actualiza solo: en el heartbeat el servidor ofrece la ultima
+version publicada en GitHub Releases (`agent-vX.Y.Z`) junto con la huella
+SHA-256 del instalador; el agente lo descarga de **tu** servidor
+(`/api/agent/update`, con su credencial), verifica la huella, lo ejecuta en
+silencio (`/quiet /update`) conservando su identidad, y reintenta como maximo
+cada 6 horas. Activado por defecto en produccion; `AGENT_AUTO_UPDATE=false` lo
+desactiva. Para publicar una version basta con crear la release con el nuevo
+`CyberCheckSetup.exe`.
+
+### Soluciones rapidas
+
+Cada problema que se puede corregir desde la propia computadora trae un comando
+de PowerShell listo para copiar y pegar, armado con los datos reales del equipo
+(`app/fixes.py`; los valores van siempre entre comillas literales). Una prueba
+analiza los comandos con el analizador de PowerShell y comprueba que cada
+comando y parametro exista, sin ejecutarlos.
+
 ### Monitoreo en tiempo real
 
 El servicio del agente consulta cada 30 s los eventos nuevos y envia al panel,

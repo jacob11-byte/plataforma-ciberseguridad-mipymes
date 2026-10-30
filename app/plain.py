@@ -10,13 +10,15 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from . import fixes
+
 URGENCY = {
     "Critico": "Urgente: atiéndelo hoy",
     "Alto": "Importante: atiéndelo esta semana",
     "Medio": "Revisar pronto",
     "Bajo": "Recomendación",
 }
-WHO = {"tu": "Lo puedes hacer tú", "tecnico": "Pide ayuda a tu técnico"}
+WHO = {"pasos": "Lo puedes hacer tú", "comando": "Lo puedes hacer tú: tiene solución rápida"}
 
 SECURITY_APP = "Abre el menú Inicio, escribe «Seguridad de Windows» y ábrela."
 
@@ -159,30 +161,26 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Es como dejar la puerta de la casa abierta: cualquier persona conectada a la misma red Wi-Fi podría intentar entrar a tu computadora.",
         "steps": ["Abre el menú Inicio, escribe «Firewall» y entra a «Firewall y protección de red».",
                   "Activa el firewall en las tres opciones: Red de dominio, Red privada y Red pública."],
-        "who": "tu",
     },
     "RDP_EXPOSED": {
         "title": "Tu computadora acepta que la manejen a distancia",
         "what": "Está encendido el «Escritorio remoto», que permite controlar esta computadora desde otro lugar.",
         "why": "Los delincuentes buscan computadoras con esta puerta abierta y prueban miles de contraseñas hasta entrar. Es la forma más común en que secuestran la información de las empresas.",
         "steps": ["Si nadie se conecta a esta computadora a distancia, apágalo: Inicio → Configuración → Sistema → Escritorio remoto → Desactivado.",
-                  "Si sí lo usan, pide a tu técnico que lo proteja (con una VPN y contraseñas fuertes)."],
-        "who": "tu",
+                  "Si sí lo usan, déjalo encendido solo en las computadoras que lo necesiten y usa contraseñas largas y únicas."],
     },
     "RISKY_SERVICE_ENABLED": {
         "title": "Hay funciones para manejar la computadora a distancia encendidas",
         "what": _services,
         "why": "Si alguien roba una contraseña de la empresa, puede usar estas funciones para meterse en esta computadora sin que nadie lo note.",
-        "steps": ["Pregunta a tu técnico si las usan.", "Si no las usan, que las apague."],
-        "who": "tecnico",
+        "steps": ["Si en tu empresa nadie maneja esta computadora a distancia, apágalas con la solución rápida de abajo.", "Si un proveedor de soporte sí las usa, confírmalo con él antes."],
     },
     "UNAUTHORIZED_LOCAL_ADMIN": {
         "title": "Hay cuentas con permisos de «jefe» que no deberían tenerlos",
         "what": lambda e: f"Estas cuentas pueden instalar cualquier programa y cambiar toda la configuración: {_join(e.get('unauthorized_accounts') or ['(ver detalle técnico)'])}.",
         "why": "Si a una de esas cuentas le roban la contraseña o abre un archivo con virus, el atacante tendría control total de la computadora.",
         "steps": ["Confirma quién necesita realmente esos permisos.",
-                  "Pide a tu técnico que se los quite a los demás; podrán seguir trabajando normal."],
-        "who": "tecnico",
+                  "Quítaselos a las demás con la solución rápida de abajo; podrán seguir trabajando normal con una cuenta estándar."],
     },
     "UPDATES_PENDING": {
         "title": "Faltan actualizaciones de Windows",
@@ -190,7 +188,6 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Las actualizaciones tapan agujeros de seguridad que los delincuentes ya conocen. Mientras no se instalen, esos agujeros siguen abiertos.",
         "steps": ["Abre Inicio → Configuración → Windows Update.", "Pulsa «Buscar actualizaciones» e instala todo.",
                   "Reinicia la computadora cuando te lo pida."],
-        "who": "tu",
     },
     "ANTIVIRUS_DISABLED": {
         "title": "El antivirus está apagado o a medias",
@@ -198,7 +195,6 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Sin el antivirus activo, un archivo con virus que llegue por correo o por una memoria USB se abre sin que nada lo detenga.",
         "steps": [SECURITY_APP, "Entra a «Protección contra virus y amenazas» → «Administrar la configuración».",
                   "Activa «Protección en tiempo real» y «Protección contra alteraciones»."],
-        "who": "tu",
     },
     "ANTIVIRUS_SIGNATURES_OLD": {
         "title": "El antivirus no se ha actualizado",
@@ -206,14 +202,12 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Cada día aparecen virus nuevos. Con una lista vieja, el antivirus no reconoce los más recientes.",
         "steps": [SECURITY_APP, "Entra a «Protección contra virus y amenazas» y pulsa «Buscar actualizaciones».",
                   "Si no funciona, revisa que la computadora tenga Internet."],
-        "who": "tu",
     },
     "ANTIVIRUS_SCAN_OLD": {
         "title": "Hace tiempo que el antivirus no revisa la computadora",
         "what": lambda e: f"El último análisis completo de la computadora fue hace {e.get('quick_scan_age_days', 'varios')} días.",
         "why": "Un virus que entró antes de que se conociera solo se descubre cuando el antivirus vuelve a revisar todo.",
         "steps": [SECURITY_APP, "Entra a «Protección contra virus y amenazas» y pulsa «Examen rápido»."],
-        "who": "tu",
     },
     "ANTIVIRUS_ACTIVE_THREATS": {
         "title": "Hay un virus dentro de la computadora",
@@ -222,8 +216,7 @@ PLAIN: dict[str, dict[str, Any]] = {
         "steps": ["Desconecta la computadora de Internet (Wi-Fi o cable).", SECURITY_APP,
                   "Entra a «Historial de protección» y elige «Quitar» en cada amenaza; luego haz un «Examen completo».",
                   "Desde OTRA computadora o celular, cambia tus contraseñas importantes (correo, banco).",
-                  "Avisa a tu técnico."],
-        "who": "tecnico",
+                  "Si el antivirus no logra eliminarlo, copia tus archivos importantes a un disco externo y considera reinstalar Windows."],
     },
     "USB_STORAGE_CONNECTED": {
         "title": "Hay una memoria USB conectada",
@@ -231,23 +224,20 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Las memorias USB son una forma común de que entren virus o de que alguien se lleve información de la empresa.",
         "steps": ["Si no la reconoces, desconéctala.",
                   "Si es tuya, revísala con el antivirus antes de abrir sus archivos (clic derecho sobre la memoria → «Examinar con Microsoft Defender»)."],
-        "who": "tu",
     },
     "UNSIGNED_DEVICE_DRIVER": {
         "title": "Un aparato usa un programa de control sin garantía del fabricante",
         "what": lambda e: f"El programa que hace funcionar {_join(_field(e.get('unsigned_drivers'), 'DeviceName')) or 'un aparato'} no está firmado por su fabricante.",
         "why": "Estos programas tienen el máximo poder dentro de la computadora; uno falso o dañado podría apagar el antivirus.",
-        "steps": ["Pide a tu técnico que instale la versión oficial desde la página del fabricante.",
-                  "Si ese aparato ya no se usa, que lo retire."],
-        "who": "tecnico",
+        "steps": ["Busca el nombre del aparato en la página oficial del fabricante y descarga su programa (driver) más reciente.",
+                  "Si ese aparato ya no se usa, desconéctalo."],
     },
     "DEVICE_WITH_ERROR": {
         "title": "Un aparato de la computadora está fallando",
         "what": lambda e: f"No funciona bien: {_join(_field(e.get('device_errors'), 'FriendlyName')) or 'un dispositivo'}.",
         "why": "Puede ser una falla del aparato o de su programa de control, y afecta la estabilidad de la computadora.",
         "steps": ["Desconéctalo y vuelve a conectarlo, o reinicia la computadora.",
-                  "Si sigue fallando, pide a tu técnico que revise el «Administrador de dispositivos»."],
-        "who": "tu",
+                  "Si sigue fallando, usa la solución rápida de abajo: abre el «Administrador de dispositivos»; en el aparato con signo amarillo, clic derecho → «Actualizar controlador»."],
     },
     "BACKUP_OLD_OR_MISSING": {
         "title": "No hay una copia de seguridad reciente",
@@ -256,7 +246,6 @@ PLAIN: dict[str, dict[str, Any]] = {
         "steps": ["Haz hoy una copia de tus archivos importantes en un disco externo o en la nube (OneDrive, Google Drive).",
                   "Programa copias automáticas todos los días.",
                   "De vez en cuando, prueba recuperar un archivo para comprobar que la copia sirve."],
-        "who": "tu",
     },
     "UAC_DISABLED": {
         "title": "Windows ya no pide permiso antes de cambios importantes",
@@ -264,14 +253,12 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Sin ese aviso, cualquier programa —incluido un virus— puede cambiar todo en la computadora sin preguntarte.",
         "steps": ["Abre Inicio y escribe «Cambiar configuración de Control de cuentas de usuario».",
                   "Sube la barra al nivel recomendado, pulsa Aceptar y reinicia."],
-        "who": "tu",
     },
     "SMB1_ENABLED": {
         "title": "Hay una forma antigua e insegura de compartir archivos encendida",
         "what": "Está activado «SMB versión 1», un método viejo para compartir carpetas en la red.",
         "why": "Por ahí entró el famoso virus WannaCry, que paralizó empresas y hospitales en todo el mundo.",
-        "steps": ["Pide a tu técnico que lo desactive, confirmando antes que ningún equipo viejo de la oficina lo necesita."],
-        "who": "tecnico",
+        "steps": ["Desactívalo con la solución rápida de abajo y reinicia la computadora.", "Si después una impresora o disco de red muy viejo deja de funcionar, ese aparato necesita actualizarse."],
     },
     "RDP_NLA_DISABLED": {
         "title": "El acceso a distancia tiene una protección apagada",
@@ -279,7 +266,6 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Facilita que alguien pruebe contraseñas una y otra vez, o aproveche fallas antes de identificarse.",
         "steps": ["Si no usas el acceso a distancia, apágalo (Configuración → Sistema → Escritorio remoto).",
                   "Si lo usas: Escritorio remoto → Configuración avanzada → activa «Requerir autenticación a nivel de red»."],
-        "who": "tu",
     },
     "BITLOCKER_OFF": {
         "title": "Los archivos del disco no están protegidos con clave",
@@ -287,147 +273,127 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Si te roban o pierdes la computadora (sobre todo una laptop), cualquiera podría ver tus archivos, correos y contraseñas guardadas.",
         "steps": ["Abre Inicio y escribe «BitLocker» o «Cifrado de dispositivo», y actívalo para el disco C:.",
                   "Guarda la clave de recuperación en un lugar seguro FUERA de la computadora (por ejemplo, en tu cuenta Microsoft)."],
-        "who": "tu",
     },
     "SECURE_BOOT_OFF": {
         "title": "Falta una protección del encendido de la computadora",
         "what": "Está apagado el «Arranque seguro» (Secure Boot).",
         "why": "Esa protección impide que un virus se cargue antes que Windows, donde el antivirus no lo puede ver.",
-        "steps": ["Pide a tu técnico que lo active en la configuración de la computadora (BIOS/UEFI)."],
-        "who": "tecnico",
+        "steps": ["Usa la solución rápida de abajo: la computadora se reinicia y abre su configuración interna.", "Busca «Secure Boot» (suele estar en la pestaña «Boot» o «Security»), cámbialo a «Enabled», guarda con F10 y confirma."],
     },
     "GUEST_ACCOUNT_ENABLED": {
         "title": "La cuenta de «Invitado» está activa",
         "what": "Cualquier persona puede entrar a la computadora como «Invitado», sin tener cuenta propia.",
         "why": "No sabrías quién usó la computadora, y es una puerta de entrada innecesaria.",
-        "steps": ["Pide a tu técnico que desactive la cuenta Invitado."],
-        "who": "tecnico",
+        "steps": ["Desactívala con la solución rápida de abajo."],
     },
     "BUILTIN_ADMIN_ENABLED": {
         "title": "La cuenta «Administrador» que trae Windows está activa",
         "what": lambda e: f"Está habilitada la cuenta «{e.get('account') or 'Administrador'}», que viene de fábrica con Windows.",
         "why": "Su nombre lo conocen todos los atacantes y suele no bloquearse aunque se equivoquen de contraseña muchas veces.",
-        "steps": ["Usa cuentas con el nombre de cada persona para administrar.", "Pide a tu técnico que desactive la cuenta de fábrica."],
-        "who": "tecnico",
+        "steps": ["Asegúrate de entrar a Windows con tu propia cuenta (no con «Administrador»).", "Desactiva la cuenta de fábrica con la solución rápida de abajo."],
     },
     "ACCOUNT_NO_PASSWORD_REQUIRED": {
         "title": "Hay cuentas que pueden no tener contraseña",
         "what": lambda e: f"Estas cuentas no están obligadas a tener contraseña: {_join(e.get('accounts') or ['(ver detalle técnico)'])}.",
         "why": "Una cuenta sin contraseña es como una puerta sin cerradura: cualquiera entra con solo saber el nombre.",
-        "steps": ["Ponle contraseña a cada una de esas cuentas.", "Si alguna ya no se usa, que tu técnico la desactive."],
-        "who": "tecnico",
+        "steps": ["Ponle contraseña a cada una de esas cuentas.", "Usa la solución rápida de abajo: obliga a usar contraseña y te pide escribir una nueva para cada cuenta."],
     },
     "PASSWORD_POLICY_WEAK": {
         "title": "Las reglas para las contraseñas son débiles",
         "what": _policy,
         "why": "Las contraseñas cortas se adivinan en minutos, y sin bloqueo un atacante puede probar sin parar.",
         "steps": ["Usa contraseñas de 12 caracteres o más; una frase es fácil de recordar (por ejemplo: «MiCafeConPan2026»).",
-                  "Pide a tu técnico que configure: mínimo 12 caracteres y bloqueo después de 10 intentos."],
-        "who": "tecnico",
+                  "Aplica la regla con la solución rápida de abajo: mínimo 12 caracteres y bloqueo después de 10 intentos fallidos."],
     },
     "WDIGEST_PLAINTEXT": {
         "title": "Windows guarda contraseñas sin protección en la memoria",
         "what": "Una configuración antigua hace que las contraseñas de quienes usan la computadora queden a la vista mientras está encendida.",
         "why": "Los delincuentes tienen herramientas que las leen en segundos y las usan para entrar a otras computadoras y servicios de la empresa.",
-        "steps": ["Pide a tu técnico que lo corrija hoy y reinicie la computadora.",
+        "steps": ["Corrígelo hoy con la solución rápida de abajo y reinicia la computadora.",
                   "Después, cambien las contraseñas de quienes usaron esta computadora."],
-        "who": "tecnico",
     },
     "NTLMV1_ALLOWED": {
         "title": "La computadora usa un método viejo para comprobar contraseñas",
         "what": "Acepta un sistema antiguo para verificar contraseñas que es fácil de descifrar.",
         "why": "Alguien conectado a la misma red podría capturar y descubrir contraseñas.",
-        "steps": ["Pide a tu técnico que exija el método moderno (NTLMv2)."],
-        "who": "tecnico",
+        "steps": ["Activa el método moderno con la solución rápida de abajo y reinicia la computadora."],
     },
     "LLMNR_ENABLED": {
         "title": "Mejora recomendada en la configuración de red",
         "what": "Está activa una función de Windows (LLMNR) que ayuda a encontrar equipos en la red, pero que un intruso puede aprovechar.",
         "why": "Un equipo malicioso conectado a la misma red podría hacerse pasar por otro y capturar contraseñas. No es urgente.",
-        "steps": ["Cuando puedas, pide a tu técnico que la desactive."],
-        "who": "tecnico",
+        "steps": ["Cuando puedas, desactívala con la solución rápida de abajo. No afecta el uso normal de la red."],
     },
     "DEFENDER_EXCLUSIONS": {
         "title": "El antivirus tiene lugares que no revisa",
         "what": lambda e: f"El antivirus tiene orden de ignorar: {_join(_field(e.get('exclusions'), 'value')) or 'algunas carpetas o programas'}.",
         "why": "Los delincuentes agregan estas «zonas ciegas» para esconder sus programas; también aparecen por instalaciones descuidadas.",
-        "steps": ["Pregunta a tu técnico si alguien las agregó a propósito y por qué.", "Si nadie las reconoce, que las quite."],
-        "who": "tecnico",
+        "steps": ["Si alguien de la empresa las agregó a propósito (por ejemplo, para un programa contable), déjalas.", "Si nadie las reconoce, quítalas con la solución rápida de abajo."],
     },
     "AUTORUN_UNSIGNED_USER_PATH": {
         "title": "Un programa desconocido se abre solo al encender la computadora",
         "what": lambda e: f"Arranca automáticamente un programa sin garantía de su fabricante: {_join(_field(e.get('entries'), 'name')) or 'ver detalle técnico'}.",
         "why": "Así suelen quedarse los virus: se esconden en carpetas personales y se ejecutan cada vez que enciendes la computadora.",
         "steps": ["Si no reconoces el nombre: abre el Administrador de tareas (Ctrl+Shift+Esc) → pestaña «Inicio» → clic derecho → «Deshabilitar».",
-                  "Pide a tu técnico que revise ese archivo con el antivirus."],
-        "who": "tecnico",
+                  "O usa la solución rápida de abajo: revisa el archivo con el antivirus y quita su arranque automático."],
     },
     "SHARE_OPEN_TO_EVERYONE": {
         "title": "Hay una carpeta compartida que cualquiera puede abrir",
         "what": lambda e: f"Estas carpetas están compartidas con «Todos» en la red: {_join(_field(e.get('shares'), 'name')) or 'ver detalle técnico'}.",
         "why": "Cualquier equipo de la red puede ver o cambiar esos archivos; si un virus entra a otra computadora, también puede dañarlos.",
-        "steps": ["Pide a tu técnico que permita el acceso solo a las personas que lo necesitan."],
-        "who": "tecnico",
+        "steps": ["Quita el acceso de «Todos» con la solución rápida de abajo.", "Luego da acceso solo a quien lo necesita: clic derecho en la carpeta → Propiedades → Compartir."],
     },
     "RISKY_PORT_LISTENING": {
         "title": "Un programa acepta conexiones desde otras computadoras",
         "what": _ports,
         "why": "Es una puerta abierta hacia tu computadora. Algunos de estos programas tienen contraseñas débiles o envían datos sin protección.",
-        "steps": ["Si no reconoces el programa, desinstálalo.", "Si lo necesitan, pide a tu técnico que lo proteja o lo bloquee."],
-        "who": "tecnico",
+        "steps": ["Si no reconoces el programa, desinstálalo (Configuración → Aplicaciones).", "Si lo necesitas, bloquea las conexiones desde otras computadoras con la solución rápida de abajo."],
     },
     "PROCESS_UNSIGNED_USER_PATH": {
         "title": "Hay un programa sospechoso funcionando",
         "what": lambda e: f"Se está ejecutando un programa sin garantía de su fabricante desde una carpeta personal o temporal: {_join(_field(e.get('processes'), 'name')) or 'ver detalle técnico'}.",
         "why": "Es el comportamiento típico de los virus y programas espía.",
         "steps": ["Anota el nombre del programa.", SECURITY_APP + " Entra a «Protección contra virus y amenazas» → «Opciones de examen» → «Examen completo».",
-                  "Avisa a tu técnico."],
-        "who": "tecnico",
+                  "O usa la solución rápida de abajo: cierra el programa y lo revisa con el antivirus."],
     },
     "OS_END_OF_SUPPORT": {
         "title": "Tu versión de Windows ya no recibe protección",
         "what": _os,
         "why": "Es como una casa a la que ya no le cambian las cerraduras: cada falla nueva que se descubra quedará abierta para siempre.",
         "steps": ["Revisa en Configuración → Windows Update si te ofrece actualizar a Windows 11 (es gratis si tu computadora lo permite).",
-                  "Si tu computadora no lo permite, planifica cambiarla o pide a tu técnico opciones de soporte extendido."],
-        "who": "tecnico",
+                  "Si tu computadora no lo permite, planifica cambiarla; mientras tanto, mantén el antivirus activo y no abras archivos de origen desconocido."],
     },
     "BRUTE_FORCE_LOGON": {
         "title": "Alguien está intentando adivinar una contraseña",
         "what": _bruteforce,
         "why": "Si la contraseña es débil, tarde o temprano la persona logrará entrar.",
         "steps": ["Si no fuiste tú equivocándote, cambia esa contraseña por una larga y única.",
-                  "Si los intentos vienen de afuera, pide a tu técnico que bloquee ese origen y apague el acceso a distancia si no se usa."],
-        "who": "tu",
+                  "Usa la solución rápida de abajo: bloquea a quien intenta entrar y hace que la cuenta se bloquee tras 10 intentos."],
     },
     "NEW_LOCAL_ACCOUNT": {
         "title": "Se creó una cuenta nueva en la computadora",
         "what": lambda e: f"Se creó: {_join(_field(e.get('accounts'), 'target_user')) or 'una cuenta nueva'}.",
         "why": "Los intrusos crean cuentas para poder volver a entrar después. Toda cuenta nueva debe tener un responsable.",
-        "steps": ["Confirma quién la creó y para qué.", "Si nadie la reconoce, avisa a tu técnico para que la desactive."],
-        "who": "tu",
+        "steps": ["Confirma quién la creó y para qué.", "Si nadie la reconoce, desactívala con la solución rápida de abajo."],
     },
     "ADMIN_GROUP_MEMBER_ADDED": {
         "title": "Alguien recibió permisos de «jefe» en la computadora",
         "what": lambda e: f"Se agregó una cuenta al grupo de Administradores{(' (lo hizo ' + _join(_field(e.get('changes'), 'subject_user')) + ')') if _field(e.get('changes'), 'subject_user') else ''}.",
         "why": "Con esos permisos se puede hacer cualquier cosa en la computadora; es un paso típico de un ataque.",
-        "steps": ["Confirma que el cambio fue autorizado.", "Si no lo fue, pide a tu técnico que quite esa cuenta y revise la computadora."],
-        "who": "tecnico",
+        "steps": ["Confirma que el cambio fue autorizado.", "Si no lo fue, quítale esos permisos con la solución rápida de abajo y revisa la computadora con el antivirus."],
     },
     "SECURITY_LOG_CLEARED": {
         "title": "Alguien borró el historial de seguridad de la computadora",
         "what": lambda e: f"Se borró el registro donde Windows anota quién entra y qué pasa{(' (lo hizo ' + _join(_field(e.get('events'), 'subject_user')) + ')') if _field(e.get('events'), 'subject_user') else ''}.",
         "why": "Casi nunca es algo normal: suele hacerlo un intruso para borrar sus huellas.",
         "steps": ["Trata la computadora como posiblemente infectada o invadida.", "Cambia la contraseña de la cuenta que lo borró.",
-                  "Avisa a tu técnico de inmediato."],
-        "who": "tecnico",
+                  "Revisa toda la computadora con el antivirus usando la solución rápida de abajo."],
     },
     "SUSPICIOUS_SERVICE_INSTALLED": {
         "title": "Se instaló un programa sospechoso que funciona en segundo plano",
         "what": lambda e: f"Se instaló un programa que corre siempre, aunque nadie use la computadora, desde un lugar poco común: {_join(_field(e.get('services'), 'service_name')) or 'ver detalle técnico'}.",
         "why": "Así funcionan muchas herramientas de ataque para mantener el control de la computadora.",
-        "steps": ["Pide a tu técnico que lo revise y lo desactive si no es reconocido."],
-        "who": "tecnico",
+        "steps": ["Si no reconoces ese programa, detenlo con la solución rápida de abajo.", "Luego revisa la computadora con el antivirus."],
     },
     "VULNERABLE_SOFTWARE": {
         "title": "Tienes programas con fallas de seguridad conocidas",
@@ -435,7 +401,6 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "Basta con abrir un archivo preparado por un delincuente para que entre a la computadora a través de esa falla.",
         "steps": ["Actualiza cada programa a la versión indicada, desde su página oficial.",
                   "Si es un programa que ya no tiene soporte, desinstálalo (Configuración → Aplicaciones)."],
-        "who": "tu",
     },
     "EXPLOITED_VULN_UNPATCHED": {
         "title": "Falta una actualización de Windows contra ataques que están ocurriendo ahora",
@@ -443,16 +408,24 @@ PLAIN: dict[str, dict[str, Any]] = {
         "why": "No es un riesgo teórico: estos ataques están pasando hoy en el mundo.",
         "steps": ["Hoy mismo: Inicio → Configuración → Windows Update → «Buscar actualizaciones» e instala todo.",
                   "Reinicia la computadora al terminar."],
-        "who": "tu",
     },
 }
 
 
-def explain(rule_id: str, severity: str, evidence: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Plain-language explanation for a finding, or None for unknown rules."""
+def explain(
+    rule_id: str, severity: str, evidence: dict[str, Any] | None = None, has_fix: bool | None = None
+) -> dict[str, Any] | None:
+    """Plain-language explanation for a finding, or None for unknown rules.
+
+    ``has_fix`` says whether a ready-to-paste command exists; by default it is
+    worked out from the same evidence.
+    """
     entry = PLAIN.get(rule_id)
     if entry is None:
         return None
+    if has_fix is None:
+        has_fix = fixes.fix_for(rule_id, evidence) is not None
+    who = "comando" if has_fix else "pasos"
     what: str | Callable[[dict[str, Any]], str] = entry["what"]
     if callable(what):
         try:
@@ -464,7 +437,7 @@ def explain(rule_id: str, severity: str, evidence: dict[str, Any] | None = None)
         "what": what,
         "why": entry["why"],
         "steps": list(entry["steps"]),
-        "who": entry["who"],
-        "who_label": WHO[entry["who"]],
+        "who": who,
+        "who_label": WHO[who],
         "urgency": URGENCY.get(severity, ""),
     }

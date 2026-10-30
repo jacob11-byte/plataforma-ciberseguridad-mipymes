@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import random
+import re
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -32,7 +35,7 @@ from agent.modules.security_controls import collect_security_controls
 from agent.modules.software_inventory import collect_installed_software
 from agent.modules.system_inventory import collect_system_inventory
 
-AGENT_VERSION = "0.8.1"
+AGENT_VERSION = "0.8.2"
 LOGGER = logging.getLogger("cybercheck.agent")
 HTTP_TIMEOUT_SECONDS = 60
 HTTP_MAX_ATTEMPTS = 3
@@ -440,6 +443,79 @@ def rotate_credential(config: dict[str, Any]) -> bool:
     write_agent_config({**config, "token": new_token}, Path(config_path))
     config["token"] = new_token
     LOGGER.info("Credencial del agente renovada")
+    return True
+
+
+UPDATE_RETRY_SECONDS = 6 * 60 * 60
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+def _version_tuple(value: Any) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", str(value or ""))[:4]) or (0,)
+
+
+def download_update(config: dict[str, Any], url: str, target: Path, expected_sha256: str) -> bool:
+    """Fetch the installer from our own API and keep it only if the hash matches."""
+    request = urllib.request.Request(
+        f"{config['api_url'].rstrip('/')}{url}?device_id={urllib.parse.quote(config['device_id'])}"
+    )
+    request.add_header("Authorization", f"Bearer {config['token']}")
+    request.add_header("User-Agent", f"CyberCheck-Agent/{AGENT_VERSION}")
+    partial = target.with_suffix(".part")
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(request, timeout=300) as response, partial.open("wb") as handle:
+        for chunk in iter(lambda: response.read(1 << 20), b""):
+            digest.update(chunk)
+            handle.write(chunk)
+    if digest.hexdigest().lower() != expected_sha256.lower():
+        partial.unlink(missing_ok=True)
+        LOGGER.error("Actualizacion descartada: la huella SHA-256 no coincide")
+        return False
+    os.replace(partial, target)
+    return True
+
+
+def maybe_self_update(config: dict[str, Any], offer: Any) -> bool:
+    """Install a newer agent offered by the server, at most once per 6 hours.
+
+    Only the installed service (a frozen executable) updates itself; the
+    installer then stops this service, replaces the files and starts it again.
+    """
+    if not isinstance(offer, dict) or os.name != "nt" or not getattr(sys, "frozen", False):
+        return False
+    version = str(offer.get("version") or "")
+    sha256 = str(offer.get("sha256") or "")
+    url = str(offer.get("url") or "")
+    if (not version or len(sha256) != 64 or not url.startswith("/")
+            or _version_tuple(version) <= _version_tuple(AGENT_VERSION)):
+        return False
+    state = load_agent_state(config)
+    if (state.get("update_version") == version
+            and time.time() - float(state.get("update_attempt") or 0) < UPDATE_RETRY_SECONDS):
+        return False
+    path = _state_path(config)
+    if path is None:
+        return False
+    state.update({"update_version": version, "update_attempt": time.time()})
+    write_agent_config(state, path)
+    updates = path.parent / "updates"
+    updates.mkdir(parents=True, exist_ok=True)
+    for old in updates.glob("CyberCheckSetup-*.exe"):
+        old.unlink(missing_ok=True)
+    installer = updates / f"CyberCheckSetup-{version}.exe"
+    try:
+        if not download_update(config, url, installer, sha256):
+            return False
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        log_failure("No se pudo descargar la actualizacion", exc, config)
+        return False
+    LOGGER.info("Instalando la version %s del agente", version)
+    subprocess.Popen(
+        [str(installer), "/quiet", "/update"],
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
     return True
 
 
@@ -942,6 +1018,8 @@ def poll_once(config: dict[str, Any], max_tasks: int = 3) -> None:
         LOGGER.info("Resultados recuperados de la cola: %s", queue_status["sent"])
     heartbeat = send_heartbeat(config)
     LOGGER.info("Heartbeat enviado")
+    if maybe_self_update(config, heartbeat.get("update")):
+        return  # the installer is about to restart this service
     if heartbeat.get("rotate_credential"):
         try:
             rotate_credential(config)

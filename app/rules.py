@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
-from . import plain, vulndb
+from . import fixes, plain, vulndb
 
 
 @dataclass(frozen=True)
@@ -27,8 +27,10 @@ class RuleResult:
     references: tuple[str, ...] = field(default_factory=tuple)
 
     def diagnosis(self) -> dict[str, Any]:
+        quick_fix = fixes.fix_for(self.rule_id, self.evidence)
         return {
-            "plain": plain.explain(self.rule_id, self.severity, self.evidence),
+            "plain": plain.explain(self.rule_id, self.severity, self.evidence, has_fix=quick_fix is not None),
+            "quick_fix": quick_fix,
             "detail": self.detail,
             "risk": self.risk,
             "steps": list(self.steps),

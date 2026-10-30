@@ -8,6 +8,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import secrets
 import tempfile
@@ -38,6 +39,7 @@ from .accounts import (
 from . import alerts, vulndb
 from . import kev as kev_catalog
 from . import msrc as msrc_catalog
+from . import fixes
 from . import plain as plain_language
 from .ai_service import answer_company_question, answer_device_question, company_ai_summary, device_ai_summary
 from .rules import evaluate_rules
@@ -111,8 +113,9 @@ OFFLINE_ALERT_HOURS = int(os.getenv("OFFLINE_ALERT_HOURS", "48"))
 OFFLINE_CHECK_SECONDS = 10 * 60
 ENROLLMENT_TOKEN_DAYS = 30
 INSTALLER_CACHE_SECONDS = 60 * 60
+DEFAULT_RELEASES_REPO = "jacob11-byte/plataforma-ciberseguridad-mipymes"
 DEFAULT_INSTALLER_URL = (
-    "https://github.com/jacob11-byte/plataforma-ciberseguridad-mipymes/releases/latest/download/CyberCheckSetup.exe"
+    f"https://github.com/{DEFAULT_RELEASES_REPO}/releases/latest/download/CyberCheckSetup.exe"
 )
 _DEV_SESSION_SECRET = secrets.token_urlsafe(48)
 
@@ -1042,30 +1045,127 @@ def _enrollment_company(db: Any, code: str) -> int | None:
     return None
 
 
-def _installer_file() -> Path:
-    """Local copy of the generic installer, downloaded and cached on demand."""
+RELEASE_CHECK_SECONDS = 60 * 60
+RELEASE_FAILURE_RETRY_SECONDS = 10 * 60
+_release_cache: dict[str, Any] = {"checked": 0.0, "info": None}
+
+
+def version_tuple(value: Any) -> tuple[int, ...]:
+    parts = [int(part) for part in re.findall(r"\d+", str(value or ""))[:4]]
+    return tuple(parts) or (0,)
+
+
+def _latest_release() -> dict[str, Any] | None:
+    """Newest published agent ({version, url}), from GitHub Releases, cached."""
+    if os.getenv("AGENT_INSTALLER_PATH"):
+        version = os.getenv("LATEST_AGENT_VERSION")
+        return {"version": version, "url": None} if version else None
+    repo = os.getenv("AGENT_RELEASES_REPO", DEFAULT_RELEASES_REPO)
+    now = time.time()
+    age = now - _release_cache["checked"]
+    if age < (RELEASE_CHECK_SECONDS if _release_cache["info"] else RELEASE_FAILURE_RETRY_SECONDS):
+        return _release_cache["info"]
+    _release_cache["checked"] = now
+    try:
+        response = httpx.get(f"https://api.github.com/repos/{repo}/releases/latest",
+                             headers={"Accept": "application/vnd.github+json"}, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        asset = next(item for item in data["assets"] if item["name"] == "CyberCheckSetup.exe")
+        _release_cache["info"] = {
+            "version": str(data["tag_name"]).removeprefix("agent-v"),
+            "url": asset["browser_download_url"],
+        }
+    except (httpx.HTTPError, ValueError, KeyError, StopIteration):
+        logging.getLogger("cybercheck.update").warning("No se pudo consultar la ultima version del agente")
+    return _release_cache["info"]
+
+
+def _sha256_of(path: Path) -> str:
+    sidecar = path.with_name(path.name + ".sha256")
+    if sidecar.is_file() and sidecar.stat().st_mtime >= path.stat().st_mtime:
+        return sidecar.read_text(encoding="ascii").strip()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    sidecar.write_text(digest.hexdigest(), encoding="ascii")
+    return digest.hexdigest()
+
+
+def _installer_bundle() -> tuple[Path, str, str | None]:
+    """(installer path, sha256, version) of the agent the server hands out.
+
+    The file and its version come from the same GitHub release, so an update
+    offer can never point at a different build than the one downloaded.
+    """
     local = os.getenv("AGENT_INSTALLER_PATH")
     if local and Path(local).is_file():
-        return Path(local)
-    url = os.getenv("AGENT_INSTALLER_URL", DEFAULT_INSTALLER_URL)
-    cache = Path(tempfile.gettempdir()) / "cybercheck-installer" / "CyberCheckSetup.exe"
-    if cache.is_file() and time.time() - cache.stat().st_mtime < INSTALLER_CACHE_SECONDS:
-        return cache
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    partial = cache.with_suffix(".part")
-    digest = hashlib.sha256()
-    with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
-        response.raise_for_status()
-        with partial.open("wb") as handle:
-            for chunk in response.iter_bytes():
-                digest.update(chunk)
-                handle.write(chunk)
-    expected = os.getenv("AGENT_INSTALLER_SHA256", "").strip().lower()
-    if expected and not hmac.compare_digest(digest.hexdigest(), expected):
-        partial.unlink(missing_ok=True)
-        raise RuntimeError("El instalador descargado no coincide con AGENT_INSTALLER_SHA256")
-    os.replace(partial, cache)
-    return cache
+        return Path(local), _sha256_of(Path(local)), os.getenv("LATEST_AGENT_VERSION")
+    release = _latest_release()
+    version = release["version"] if release else None
+    url = os.getenv("AGENT_INSTALLER_URL") or (release["url"] if release else DEFAULT_INSTALLER_URL)
+    cache = Path(tempfile.gettempdir()) / "cybercheck-installer" / f"CyberCheckSetup-{version or 'latest'}.exe"
+    fresh = cache.is_file() and (version or time.time() - cache.stat().st_mtime < INSTALLER_CACHE_SECONDS)
+    if not fresh:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        partial = cache.with_suffix(".part")
+        digest = hashlib.sha256()
+        with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
+            response.raise_for_status()
+            with partial.open("wb") as handle:
+                for chunk in response.iter_bytes():
+                    digest.update(chunk)
+                    handle.write(chunk)
+        expected = os.getenv("AGENT_INSTALLER_SHA256", "").strip().lower()
+        if expected and not hmac.compare_digest(digest.hexdigest(), expected):
+            partial.unlink(missing_ok=True)
+            raise RuntimeError("El instalador descargado no coincide con AGENT_INSTALLER_SHA256")
+        os.replace(partial, cache)
+        cache.with_name(cache.name + ".sha256").write_text(digest.hexdigest(), encoding="ascii")
+    return cache, _sha256_of(cache), version
+
+
+def _installer_file() -> Path:
+    return _installer_bundle()[0]
+
+
+def _auto_update_enabled() -> bool:
+    configured = os.getenv("AGENT_AUTO_UPDATE")
+    if configured is not None:
+        return configured.strip().lower() not in {"0", "false", "no", "off"}
+    return _production_mode()
+
+
+def _update_offer(current_version: str) -> dict[str, Any] | None:
+    """Tell an outdated agent which build to install, with its SHA-256."""
+    if not _auto_update_enabled():
+        return None
+    release = _latest_release()
+    if not release or not release.get("version") or version_tuple(release["version"]) <= version_tuple(current_version):
+        return None
+    try:
+        _path, sha256, version = _installer_bundle()
+    except Exception:  # noqa: BLE001 - an unavailable installer just postpones the update
+        return None
+    if version != release["version"]:
+        return None
+    return {"version": version, "sha256": sha256, "url": "/api/agent/update"}
+
+
+@app.get("/api/agent/update")
+def agent_update(device_id: str, authorization: str | None = Header(default=None)) -> Response:
+    """Installer for the agent's self-update; only enrolled devices get it."""
+    _device_for_token(device_id, authorization)
+    try:
+        path, sha256, version = _installer_bundle()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Actualizacion no disponible") from exc
+    return FileResponse(
+        path, media_type="application/vnd.microsoft.portable-executable",
+        filename=f"CyberCheckSetup-{version or 'latest'}.exe",
+        headers={"X-Installer-SHA256": sha256, "Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/agent/installer")
@@ -1161,6 +1261,7 @@ def heartbeat(payload: HeartbeatRequest, authorization: str | None = Header(defa
             "ok": True,
             "device_id": payload.device_id,
             "rotate_credential": _credential_needs_rotation(device),
+            "update": _update_offer(payload.agent_version),
         }
 
 
@@ -2276,8 +2377,13 @@ def finding_view(row: dict[str, Any]) -> dict[str, Any]:
     finding["diagnosis"] = json_loads(finding.pop("details_json", None)) or {}
     # Findings stored before plain-language explanations existed get the
     # general version until the next scan refreshes them with exact details.
+    if "quick_fix" not in finding["diagnosis"]:
+        finding["diagnosis"]["quick_fix"] = fixes.fix_for(finding.get("rule_id", ""), {})
     if not finding["diagnosis"].get("plain"):
-        finding["diagnosis"]["plain"] = plain_language.explain(finding.get("rule_id", ""), finding.get("severity", ""))
+        finding["diagnosis"]["plain"] = plain_language.explain(
+            finding.get("rule_id", ""), finding.get("severity", ""), {},
+            has_fix=finding["diagnosis"]["quick_fix"] is not None,
+        )
     return finding
 
 

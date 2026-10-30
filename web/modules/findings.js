@@ -42,6 +42,31 @@ function plainBlock(finding) {
       <p><strong>¿Qué pasa?</strong> ${escapeHtml(plain.what)}</p>
       <p><strong>¿Por qué importa?</strong> ${escapeHtml(plain.why)}</p>
       ${resolved ? "" : `<div><strong>¿Qué hago?</strong><ol>${(plain.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></div>`}
+      ${resolved ? "" : quickFixBlock(finding.diagnosis?.quick_fix)}
+    </div>
+  `;
+}
+
+// Copy-and-paste fix for people without IT support.
+function quickFixBlock(fix) {
+  if (!fix?.command) return "";
+  const open = fix.admin
+    ? "Haz clic derecho en el botón Inicio y elige «Terminal (Administrador)» o «Windows PowerShell (Administrador)». Acepta el permiso de Windows."
+    : "Haz clic derecho en el botón Inicio y elige «Terminal» o «Windows PowerShell».";
+  return `
+    <div class="quick-fix">
+      <strong>Solución rápida (copiar y pegar)</strong>
+      <ol>
+        <li>${escapeHtml(open)}</li>
+        <li>Pulsa <em>Copiar</em>, haz clic derecho dentro de esa ventana para pegar y presiona <kbd>Enter</kbd>.</li>
+        ${fix.restart ? "<li>Reinicia la computadora cuando termine.</li>" : ""}
+        <li>En este panel pulsa <em>Solicitar revisión</em> para comprobar que quedó resuelto.</li>
+      </ol>
+      <div class="fix-command">
+        <code>${escapeHtml(fix.command)}</code>
+        <button type="button" class="small copy-cmd" data-cmd="${escapeHtml(fix.command)}">Copiar</button>
+      </div>
+      ${fix.warning ? `<p class="fix-warning">⚠ ${escapeHtml(fix.warning)}</p>` : ""}
     </div>
   `;
 }

@@ -598,8 +598,27 @@ tbody tr:hover { background: #fbfdff; }
 .urgency.sev-Alto { background: #fff0c2; color: #744b00; }
 .urgency.sev-Medio { background: #dceeff; color: #155b89; }
 .urgency.sev-Bajo { background: #eef2f7; color: #475569; }
-.who-tu { background: #dff7ea; color: #146b3a; }
-.who-tecnico { background: #ede9fe; color: #5b21b6; }
+.who-pasos, .who-comando { background: #dff7ea; color: #146b3a; }
+.quick-fix {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid #b7e4c7;
+  border-radius: 10px;
+  background: #f0fbf5;
+}
+.quick-fix ol { margin: 0; padding-left: 20px; display: grid; gap: 3px; font-size: 14px; }
+.quick-fix .fix-command { margin-top: 2px; }
+.quick-fix .fix-command code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fix-warning { margin: 0; font-size: 13px; color: #744b00; }
+kbd {
+  padding: 1px 6px;
+  border: 1px solid #c7d0df;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: #ffffff;
+  font-size: 12px;
+}
 .tech-details {
   margin-top: 4px;
   border-top: 1px dashed #dde3ee;

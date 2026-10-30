@@ -50,6 +50,16 @@ class SetupError(RuntimeError):
     pass
 
 
+class NotLinkedError(SetupError):
+    """The installer has no account token and the computer is not enrolled."""
+
+
+NOT_LINKED_MESSAGE = (
+    "Este instalador no esta vinculado a ninguna cuenta. Descargalo desde el panel con el boton "
+    "'Agregar computadora' y no cambies el nombre del archivo."
+)
+
+
 def install_root() -> Path:
     return Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "CyberCheck" / "Agent"
 
@@ -106,10 +116,7 @@ def load_enrollment(path: Path, token: str | None = None) -> dict[str, Any]:
     if token:
         enrollment["registration_code"] = token
     if not enrollment.get("registration_code"):
-        raise SetupError(
-            "Este instalador no esta vinculado a ninguna cuenta. Descargalo desde el panel con el boton "
-            "'Agregar computadora' y no cambies el nombre del archivo."
-        )
+        raise NotLinkedError(NOT_LINKED_MESSAGE)
     try:
         validate_agent_config(enrollment)
     except ValueError as exc:
@@ -342,11 +349,28 @@ def launch_tray_for_current_user(program_dir: Path) -> None:
 
 # --- Install / uninstall ----------------------------------------------------------
 
+def decide_config(
+    existing: dict[str, Any] | None,
+    enrollment: dict[str, Any] | None,
+    rejected: Callable[[dict[str, Any]], bool] = credentials_rejected,
+) -> tuple[dict[str, Any], str]:
+    """Without an account token (self-update, reinstall with the generic
+    installer) the computer must already be enrolled; its identity is kept."""
+    if enrollment is not None:
+        return resolve_config(existing, enrollment, rejected)
+    if existing and existing.get("device_id") and existing.get("token"):
+        return existing, "kept"
+    raise NotLinkedError(NOT_LINKED_MESSAGE)
+
+
 def install(payload: Path) -> str:
     program_dir, data_dir = install_root(), data_root()
-    enrollment = load_enrollment(
-        payload / "enrollment.json", enrollment_token_from_name(Path(sys.executable).name)
-    )
+    try:
+        enrollment: dict[str, Any] | None = load_enrollment(
+            payload / "enrollment.json", enrollment_token_from_name(Path(sys.executable).name)
+        )
+    except NotLinkedError:
+        enrollment = None
     LOGGER.info("Instalando %s %s", PRODUCT_NAME, AGENT_VERSION)
 
     stop_components()
@@ -355,7 +379,11 @@ def install(payload: Path) -> str:
     data_dir.mkdir(parents=True, exist_ok=True)
 
     config_path = data_dir / "agent_config.json"
-    config, reason = resolve_config(read_json(config_path), enrollment)
+    try:
+        config, reason = decide_config(read_json(config_path), enrollment)
+    except NotLinkedError:
+        run(["sc.exe", "start", SERVICE_NAME], check=False)  # leave the previous install running
+        raise
     write_json_atomic(config_path, config)
     LOGGER.info("Configuracion: %s", reason)
 
@@ -368,6 +396,20 @@ def install(payload: Path) -> str:
     if not wait_service_state("RUNNING", timeout=45):
         raise SetupError("El servicio se instalo pero no llego a ejecutarse; revisa el Visor de eventos")
     return reason
+
+
+def relaunch_tray_for_users(program_dir: Path) -> None:
+    """After a silent self-update (running as SYSTEM) bring the tray icon back
+    in the sessions of signed-in users via a one-shot group task."""
+    tray = "'" + str(program_dir / "CyberCheckTray.exe").replace("'", "''") + "'"
+    script = (
+        f"$action = New-ScheduledTaskAction -Execute {tray}; "
+        "$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545'; "
+        "Register-ScheduledTask -TaskName 'CyberCheck Tray Restart' -Action $action -Principal $principal -Force | Out-Null; "
+        "Start-ScheduledTask -TaskName 'CyberCheck Tray Restart'; Start-Sleep -Seconds 5; "
+        "Unregister-ScheduledTask -TaskName 'CyberCheck Tray Restart' -Confirm:$false"
+    )
+    run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], check=False)
 
 
 def schedule_directory_removal(path: Path) -> None:
@@ -454,6 +496,9 @@ def main(argv: list[str] | None = None) -> int:
         if not quiet:
             message(f"No se pudo completar la instalacion:\n{exc}\n\nRegistro: {log_path}", flags=0x10)
         return 1
+    if "update" in flags:
+        LOGGER.info("Actualizacion automatica completada (%s)", reason)
+        relaunch_tray_for_users(install_root())
     if not quiet:
         launch_tray_for_current_user(install_root())
         detail = (

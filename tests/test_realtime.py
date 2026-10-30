@@ -138,6 +138,20 @@ class SnapshotDiffTest(unittest.TestCase):
         self.assertIn("32 GB", events[0]["detail"])
         self.assertEqual(c.process(snap, now=T0 + 60), [])
 
+    def test_drive_present_at_start_and_unplugged_later(self):
+        c = classifier()
+        drive = {"model": "Kingston DataTraveler", "serial": "K1", "size": "32000000000"}
+        start = c.process({**self.BASE, "usb": [drive]}, now=T0)
+        self.assertEqual([e["event_type"] for e in start], ["usb_connected"])
+        self.assertTrue(start[0]["data"]["already_connected"])
+        self.assertEqual(c.process({**self.BASE, "usb": [drive]}, now=T0 + 30), [])
+        gone = c.process({**self.BASE, "usb": []}, now=T0 + 60)
+        self.assertEqual([(e["event_type"], e["severity"]) for e in gone], [("usb_disconnected", "Info")])
+        self.assertIn("Kingston", gone[0]["detail"])
+        back = c.process({**self.BASE, "usb": [drive]}, now=T0 + 90)
+        self.assertEqual([e["event_type"] for e in back], ["usb_connected"])
+        self.assertFalse(back[0]["data"]["already_connected"])
+
     def test_empty_card_reader_is_not_a_usb_drive(self):
         c = classifier()
         c.process(self.BASE, now=T0)

@@ -20,7 +20,7 @@ class PlainLanguageTest(unittest.TestCase):
                 for key in ("title", "what", "why", "urgency", "who_label"):
                     self.assertTrue(text[key], f"{rule_id}: empty {key}")
                 self.assertTrue(text["steps"], rule_id)
-                self.assertIn(text["who"], {"tu", "tecnico"})
+                self.assertIn(text["who"], {"pasos", "comando"})
 
     def test_explanations_use_the_real_details(self):
         found = {r.rule_id: r.diagnosis()["plain"] for r in evaluate_rules({
@@ -38,7 +38,7 @@ class PlainLanguageTest(unittest.TestCase):
         self.assertIn("12 días", found["BACKUP_OLD_OR_MISSING"]["what"])
         self.assertIn("«contabilidad»", found["BRUTE_FORCE_LOGON"]["what"])
         self.assertIn("185.220.101.4", found["BRUTE_FORCE_LOGON"]["what"])
-        self.assertEqual(found["FIREWALL_PUBLIC_DISABLED"]["who_label"], "Lo puedes hacer tú")
+        self.assertEqual(found["FIREWALL_PUBLIC_DISABLED"]["who_label"], "Lo puedes hacer tú: tiene solución rápida")
         self.assertEqual(found["FIREWALL_PUBLIC_DISABLED"]["urgency"], "Importante: atiéndelo esta semana")
 
     def test_findings_stored_before_this_change_get_a_general_explanation(self):

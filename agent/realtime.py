@@ -125,6 +125,7 @@ class Classifier:
         self.known_processes: set[tuple[Any, Any]] = set()
         self.known_ports: set[tuple[str, int]] = set()
         self.known_usb: set[str] = set()
+        self.usb_info: dict[str, dict[str, Any]] = {}
         self.failed: dict[tuple[str, str, str], list[float]] = defaultdict(list)
         self.last_burst: dict[tuple[Any, ...], float] = {}
 
@@ -280,21 +281,31 @@ class Classifier:
         # A card reader without media reports no size: only real storage counts,
         # so inserting an SD card later shows up as a new drive.
         drives = [row for row in drives if str(row.get("size") or "").isdigit() and int(row["size"]) > 0]
-        current = {str(row.get("serial") or row.get("model") or "?") for row in drives}
-        fresh = current - self.known_usb
-        self.known_usb = current
-        if not self.baselined:
-            return []
+        by_id = {str(row.get("serial") or row.get("model") or "?"): row for row in drives}
+        fresh = set(by_id) - self.known_usb
+        gone = self.known_usb - set(by_id)
+        self.known_usb = set(by_id)
         events = []
-        for row in drives:
-            ident = str(row.get("serial") or row.get("model") or "?")
-            if ident not in fresh:
-                continue
+        for ident in sorted(fresh):
+            row = by_id[ident]
+            self.usb_info[ident] = row
             size = f", {round(int(row['size']) / 1e9)} GB" if str(row.get("size") or "").isdigit() else ""
+            # Drives already plugged in when monitoring starts are reported too,
+            # once per hour at most (the server drops repeated keys).
+            key = f"usb:{ident}:{int(now // 600)}" if self.baselined else f"usb:{ident}:start:{int(now // 3600)}"
             events.append(self._event(
-                f"usb:{ident}:{int(now // 600)}", "usb_connected", "Medio", "Almacenamiento USB conectado",
+                key, "usb_connected", "Medio",
+                "Almacenamiento USB conectado" if self.baselined else "Almacenamiento USB conectado (ya estaba conectado)",
                 f"{row.get('model') or 'USB'}{size}, serie {row.get('serial') or 'desconocida'}.", now,
-                {"model": row.get("model"), "serial": row.get("serial"), "size": row.get("size")},
+                {"model": row.get("model"), "serial": row.get("serial"), "size": row.get("size"),
+                 "already_connected": not self.baselined},
+            ))
+        for ident in sorted(gone):
+            row = self.usb_info.pop(ident, {})
+            events.append(self._event(
+                f"usb-off:{ident}:{int(now // 600)}", "usb_disconnected", "Info", "Almacenamiento USB desconectado",
+                f"{row.get('model') or 'USB'}, serie {row.get('serial') or ident}.", now,
+                {"model": row.get("model"), "serial": row.get("serial")},
             ))
         return events
 
