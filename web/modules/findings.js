@@ -22,9 +22,44 @@ document.addEventListener("click", async (event) => {
   setTimeout(() => { button.textContent = "Copiar"; }, 2000);
 });
 
+export function findingTitle(finding) {
+  return finding.diagnosis?.plain?.title || finding.title;
+}
+
+// Plain-language explanation for people without technical knowledge.
+function plainBlock(finding) {
+  const plain = finding.diagnosis?.plain;
+  if (!plain) return "";
+  const resolved = finding.status === "resolved";
+  return `
+    <div class="plain">
+      <div class="plain-tags">
+        ${resolved
+          ? `<span class="badge resolved">Ya está corregido</span>`
+          : `<span class="urgency sev-${escapeHtml(finding.severity)}">${escapeHtml(plain.urgency || finding.severity)}</span>`}
+        <span class="who who-${escapeHtml(plain.who)}">${escapeHtml(plain.who_label)}</span>
+      </div>
+      <p><strong>¿Qué pasa?</strong> ${escapeHtml(plain.what)}</p>
+      <p><strong>¿Por qué importa?</strong> ${escapeHtml(plain.why)}</p>
+      ${resolved ? "" : `<div><strong>¿Qué hago?</strong><ol>${(plain.steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></div>`}
+    </div>
+  `;
+}
+
+// Plain explanation first; the technical diagnosis (exact values, commands,
+// MITRE/CIS references) stays one click away for whoever gives IT support.
+export function diagnosisBlock(finding, extraTechnical = "") {
+  const plain = plainBlock(finding);
+  const technical = technicalBlock(finding) + extraTechnical;
+  if (!plain) return technical;
+  return plain + (technical.trim()
+    ? `<details class="tech-details"><summary>Detalle técnico (para quien te da soporte)</summary>${technical}</details>`
+    : "");
+}
+
 // What exactly was found, why it is dangerous and how to fix it. Returns ""
 // for findings stored before diagnoses existed so callers can fall back.
-export function diagnosisBlock(finding) {
+function technicalBlock(finding) {
   const diagnosis = finding.diagnosis || {};
   if (!diagnosis.detail && !diagnosis.risk) return "";
   const resolved = finding.status === "resolved";
@@ -50,18 +85,17 @@ export function diagnosisBlock(finding) {
   `;
 }
 
-export function findingCard(finding, evidence) {
-  const diagnosis = diagnosisBlock(finding);
+export function findingCard(finding, evidence, deviceName = "") {
+  const technicalExtras = `<p class="muted">Se da por corregido cuando: ${escapeHtml(finding.closure_criteria)}</p>${renderEvidence(evidence)}`;
+  const diagnosis = diagnosisBlock(finding, technicalExtras);
   return `
-    <article class="finding">
+    <article class="finding ${finding.status === "resolved" ? "is-resolved" : ""}">
       <div class="finding-head">
-        <strong>${escapeHtml(finding.title)}</strong>
+        <strong>${escapeHtml(findingTitle(finding))}</strong>
         <span class="badge ${finding.status}">${statusLabel(finding.status)}</span>
       </div>
-      <div><span class="badge ${finding.severity}">${escapeHtml(finding.severity)}</span> <span class="muted">${escapeHtml(finding.device_id || "")}</span></div>
-      ${diagnosis || `${renderFindingExplanation(finding, evidence)}<p>${escapeHtml(finding.recommendation)}</p>`}
-      <p class="muted">Se cierra cuando: ${escapeHtml(finding.closure_criteria)}</p>
-      ${renderEvidence(evidence)}
+      ${deviceName ? `<div class="muted">Computadora: ${escapeHtml(deviceName)}</div>` : ""}
+      ${diagnosis || `${renderFindingExplanation(finding, evidence)}<p>${escapeHtml(finding.recommendation)}</p>${technicalExtras}`}
     </article>
   `;
 }

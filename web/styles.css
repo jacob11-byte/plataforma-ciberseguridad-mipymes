@@ -582,7 +582,57 @@ tbody tr:hover { background: #fbfdff; }
 }
 .finding.is-resolved { opacity: .75; }
 
+/* Plain-language explanation of a finding */
+.plain { display: grid; gap: 8px; font-size: 15px; line-height: 1.5; }
+.plain p { margin: 0; }
+.plain ol { margin: 4px 0 0; padding-left: 22px; display: grid; gap: 4px; }
+.plain-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.urgency, .who {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.urgency.sev-Critico { background: #ffd9de; color: #9b1128; }
+.urgency.sev-Alto { background: #fff0c2; color: #744b00; }
+.urgency.sev-Medio { background: #dceeff; color: #155b89; }
+.urgency.sev-Bajo { background: #eef2f7; color: #475569; }
+.who-tu { background: #dff7ea; color: #146b3a; }
+.who-tecnico { background: #ede9fe; color: #5b21b6; }
+.tech-details {
+  margin-top: 4px;
+  border-top: 1px dashed #dde3ee;
+  padding-top: 8px;
+}
+.tech-details > summary { cursor: pointer; color: #64748b; font-size: 13px; }
+.tech-details[open] > summary { margin-bottom: 10px; }
+.urgent-list .urgency { margin-right: 6px; }
+
 /* Live feed */
+.heartbeats { display: grid; gap: 6px; margin-bottom: 12px; }
+.heartbeat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid #dde3ee;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.heartbeat.off { background: #fff4f5; }
+.off-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #b3122e; }
+.live-help {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid #dde3ee;
+  border-radius: 10px;
+  background: #ffffff;
+}
+.live-help summary { cursor: pointer; font-weight: 700; }
+.live-help ul { margin: 6px 0; padding-left: 20px; }
+.small-print { font-size: 12px; }
 .live-dot {
   display: inline-block;
   width: 10px;

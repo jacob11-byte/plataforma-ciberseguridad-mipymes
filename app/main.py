@@ -38,6 +38,7 @@ from .accounts import (
 from . import alerts, vulndb
 from . import kev as kev_catalog
 from . import msrc as msrc_catalog
+from . import plain as plain_language
 from .ai_service import answer_company_question, answer_device_question, company_ai_summary, device_ai_summary
 from .rules import evaluate_rules
 from .storage import connect, generate_device_id, generate_token, hash_agent_token, init_db, insert_returning_id, json_dumps
@@ -2020,7 +2021,12 @@ def start_offline_watcher() -> None:
 
 
 def _alert_item(result: Any) -> dict[str, Any]:
-    return {"severity": result.severity, "title": result.title, "detail": result.detail}
+    explanation = plain_language.explain(result.rule_id, result.severity, result.evidence) or {}
+    return {
+        "severity": result.severity,
+        "title": explanation.get("title") or result.title,
+        "detail": (f"{explanation['what']} ({explanation['who_label']}.)" if explanation else result.detail),
+    }
 
 
 SCANS_WITH_EVIDENCE = 40
@@ -2268,6 +2274,10 @@ def security_score(findings: list[dict[str, Any]]) -> dict[str, Any]:
 def finding_view(row: dict[str, Any]) -> dict[str, Any]:
     finding = dict(row)
     finding["diagnosis"] = json_loads(finding.pop("details_json", None)) or {}
+    # Findings stored before plain-language explanations existed get the
+    # general version until the next scan refreshes them with exact details.
+    if not finding["diagnosis"].get("plain"):
+        finding["diagnosis"]["plain"] = plain_language.explain(finding.get("rule_id", ""), finding.get("severity", ""))
     return finding
 
 

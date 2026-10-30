@@ -1,7 +1,7 @@
 import { dashboardModules, renderModule } from "/static/modules/dashboardModules.js";
 import { escapeHtml } from "/static/modules/utils.js";
 
-import { eventRows, isSerious } from "/static/modules/events.js";
+import { deviceHeartbeats, eventRows, isSerious } from "/static/modules/events.js";
 
 const state = {
   dashboard: null, ai: null, user: null, users: null, audit: null, install: null, activeModule: "computadoras",
@@ -29,7 +29,9 @@ async function pollLive() {
     const feed = document.getElementById("liveFeed");
     if (feed) feed.innerHTML = eventRows(state.live.events);
     const count = document.getElementById("liveCount");
-    if (count) count.textContent = `${state.live.events.length} evento(s)`;
+    if (count) count.textContent = `${state.live.events.length} aviso(s)`;
+    const heartbeats = document.getElementById("liveHeartbeats");
+    if (heartbeats) heartbeats.innerHTML = deviceHeartbeats(state.dashboard?.devices || []);
   }
 }
 
@@ -106,12 +108,12 @@ function renderMetrics() {
   document.getElementById("metrics").innerHTML = [
     ["Puntaje de seguridad", metrics.security_score == null ? "-" : `${metrics.security_score}/100`],
     ["Computadoras", metrics.devices ?? devices.length],
-    ["En linea", metrics.online_devices ?? 0],
-    ["Problemas abiertos", metrics.open_findings ?? openFindings.length],
-    ["Criticos", metrics.critical ?? 0],
-    ["Altos", metrics.high ?? 0],
-    ["Medios", metrics.medium ?? 0],
-    ["Corregidos", metrics.resolved ?? 0],
+    ["Conectadas ahora", metrics.online_devices ?? 0],
+    ["Problemas por resolver", metrics.open_findings ?? openFindings.length],
+    ["Urgentes (hoy)", metrics.critical ?? 0],
+    ["Importantes (esta semana)", metrics.high ?? 0],
+    ["Revisar pronto", metrics.medium ?? 0],
+    ["Ya corregidos", metrics.resolved ?? 0],
     ["Revisiones", scans.length],
   ].map(([label, value]) => `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
 }

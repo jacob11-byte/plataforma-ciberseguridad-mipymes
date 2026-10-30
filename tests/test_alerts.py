@@ -62,7 +62,8 @@ class AlertsTest(unittest.TestCase):
         message = self.sent[0]
         self.assertEqual(message["To"], "dueno@alertas.com")
         self.assertIn("PC-CAJA", message["Subject"])
-        self.assertIn("Cortafuegos publico desactivado", message.get_content())
+        self.assertIn("La protección de red de Windows está apagada", message.get_content())
+        self.assertIn("(Lo puedes hacer tú.)", message.get_content())
         self.assertIn("/devices/" + self.device, message.get_content())
 
         self.scan(BAD_FIREWALL, "alert-scan-0002")

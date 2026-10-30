@@ -3,7 +3,7 @@ import { taskLabels, taskLabel, statusLabel } from "./labels.js";
 import { latestStatusEvidence, renderSecurityStatus } from "./securityStatus.js";
 import { findingCard, latestEvidenceByDeviceAndControl } from "./findings.js";
 import { can, roleLabels } from "./roles.js";
-import { eventRows } from "./events.js";
+import { deviceHeartbeats, eventRows } from "./events.js";
 
 const allModules = [
   ["computadoras", "Computadoras", "viewer"],
@@ -67,11 +67,25 @@ function renderLiveModule(state) {
   return `
     <div class="section-title">
       <div>
-        <h2><span class="live-dot"></span> Actividad en vivo</h2>
-        <p>Eventos de seguridad de todas tus computadoras, actualizados cada pocos segundos.</p>
+        <h2><span class="live-dot"></span> En vivo</h2>
+        <p>Lo que está pasando ahora en tus computadoras. Se actualiza solo cada 5 segundos.</p>
       </div>
-      <span class="muted" id="liveCount">${live.events.length} evento(s)</span>
+      <span class="muted" id="liveCount">${live.events.length} aviso(s)</span>
     </div>
+    <div id="liveHeartbeats">${deviceHeartbeats(state.dashboard?.devices || [])}</div>
+    <details class="live-help" ${live.events.length ? "" : "open"}>
+      <summary>¿Qué aparece aquí?</summary>
+      <p>Cada computadora protegida avisa en segundos cuando pasa algo importante para su seguridad, por ejemplo:</p>
+      <ul>
+        <li>Alguien intenta adivinar una contraseña.</li>
+        <li>Se conecta una memoria USB.</li>
+        <li>El antivirus encuentra un virus, o alguien lo apaga.</li>
+        <li>Se crea una cuenta nueva o alguien recibe permisos de administrador.</li>
+        <li>Se abre un programa sospechoso o un programa empieza a aceptar conexiones de la red.</li>
+      </ul>
+      <p>Si la lista está vacía, es buena señal: no ha pasado nada raro. <strong>¿Quieres probarlo?</strong> Conecta una memoria USB a una computadora protegida y en menos de un minuto aparecerá aquí.</p>
+    </details>
+    <h3>Avisos</h3>
     <div id="liveFeed" class="live-feed">${eventRows(live.events)}</div>
   `;
 }
@@ -170,16 +184,23 @@ function renderFindingsModule(state) {
   const { findings, evidences } = state.dashboard;
   const openFindings = findings.filter((finding) => finding.status !== "resolved");
   const latestEvidence = latestEvidenceByDeviceAndControl(evidences || []);
+  const names = Object.fromEntries((state.dashboard.devices || []).map((d) => [d.device_id, d.name || d.hostname || ""]));
+  const order = { Critico: 0, Alto: 1, Medio: 2, Bajo: 3 };
+  const ordered = [...findings].sort((a, b) =>
+    (a.status === "resolved") - (b.status === "resolved") || (order[a.severity] ?? 9) - (order[b.severity] ?? 9));
   return `
     <div class="section-title">
-      <h2>Problemas encontrados</h2>
-      <span>${openFindings.length} abiertos</span>
+      <div>
+        <h2>Problemas encontrados</h2>
+        <p>Del más urgente al menos urgente. Cada uno explica qué pasa, por qué importa y qué hacer.</p>
+      </div>
+      <span>${openFindings.length} por resolver</span>
     </div>
     <div class="findings">
-      ${findings.length ? findings.map((finding) => {
+      ${ordered.length ? ordered.map((finding) => {
         const evidenceControl = finding.rule_id.startsWith("WAZUH:") ? `wazuh_cve:${finding.rule_id}` : finding.control;
-        return findingCard(finding, latestEvidence[`${finding.device_id}:${evidenceControl}`]);
-      }).join("") : `<p class="empty-state">Aun no hay problemas encontrados. Ejecuta una revision para enviar evidencia real.</p>`}
+        return findingCard(finding, latestEvidence[`${finding.device_id}:${evidenceControl}`], names[finding.device_id]);
+      }).join("") : `<p class="empty-state">Aún no hay problemas. Cuando una computadora termine su revisión, aquí verás lo que haya que mejorar.</p>`}
     </div>
   `;
 }

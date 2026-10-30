@@ -1,4 +1,4 @@
-import { diagnosisBlock } from "/static/modules/findings.js";
+import { diagnosisBlock, findingTitle } from "/static/modules/findings.js";
 import { eventRows } from "/static/modules/events.js";
 
 const state = { detail: null, ai: null, tab: "resumen", live: { events: [], latestId: 0 } };
@@ -317,11 +317,11 @@ function renderSummary(data) {
         <h2>Lo que hay que atender primero</h2>
         ${urgent.length ? `<ol class="urgent-list">${urgent.map((finding) => `
           <li>
-            <span class="badge ${escapeHtml(finding.severity)}">${escapeHtml(finding.severity)}</span>
-            <strong>${escapeHtml(finding.title)}</strong>
-            ${finding.diagnosis?.detail ? `<div class="muted">${escapeHtml(finding.diagnosis.detail)}</div>` : ""}
-          </li>`).join("")}</ol>` : `<p class="muted">Sin problemas abiertos en la ultima evidencia.</p>`}
-        ${urgent.length ? `<button type="button" class="small secondary" data-goto-tab="hallazgos">Ver diagnostico completo</button>` : ""}
+            <span class="urgency sev-${escapeHtml(finding.severity)}">${escapeHtml(finding.diagnosis?.plain?.urgency || finding.severity)}</span>
+            <strong>${escapeHtml(findingTitle(finding))}</strong>
+            ${finding.diagnosis?.plain?.what ? `<div class="muted">${escapeHtml(finding.diagnosis.plain.what)}</div>` : ""}
+          </li>`).join("")}</ol>` : `<p class="muted">No hay problemas por resolver en la última revisión.</p>`}
+        ${urgent.length ? `<button type="button" class="small secondary" data-goto-tab="hallazgos">Ver qué hacer con cada uno</button>` : ""}
       </div>
     </section>
     ${issues.length ? `
@@ -439,10 +439,9 @@ function renderFindings(rows) {
   const ordered = [...openFindingsBySeverity(rows), ...rows.filter((finding) => finding.status === "resolved")];
   return ordered.length ? `<div class="findings">${ordered.map((finding) => `
     <article class="finding ${finding.status === "resolved" ? "is-resolved" : ""}">
-      <div class="finding-head"><strong>${escapeHtml(finding.title)}</strong><span class="badge ${finding.status}">${escapeHtml(labelValue(finding.status))}</span></div>
-      <div><span class="badge ${finding.severity}">${escapeHtml(finding.severity)}</span> <span class="muted">${escapeHtml(finding.rule_id)}</span></div>
-      ${diagnosisBlock(finding) || `<p>${escapeHtml(finding.recommendation)}</p>`}
-      <p class="muted">Se cierra cuando: ${escapeHtml(finding.closure_criteria)}</p>
+      <div class="finding-head"><strong>${escapeHtml(findingTitle(finding))}</strong><span class="badge ${finding.status}">${escapeHtml(labelValue(finding.status))}</span></div>
+      ${diagnosisBlock(finding, `<p class="muted">Se da por corregido cuando: ${escapeHtml(finding.closure_criteria)} (regla ${escapeHtml(finding.rule_id)})</p>`)
+        || `<p>${escapeHtml(finding.recommendation)}</p>`}
     </article>
   `).join("")}</div>` : `<p class="empty-state">Sin problemas registrados.</p>`;
 }
@@ -494,7 +493,7 @@ function renderLive() {
     <div class="section-title">
       <div>
         <h2><span class="live-dot"></span> Actividad en vivo de este equipo</h2>
-        <p>Intentos de acceso, cuentas y servicios nuevos, amenazas de Defender, procesos sin firma, puertos y USB; se actualiza cada 5 segundos.</p>
+        <p>Avisos al momento: intentos de adivinar contraseñas, memorias USB, virus o antivirus apagado, cuentas nuevas y programas sospechosos. Se actualiza solo cada 5 segundos; si está vacío, no ha pasado nada raro.</p>
       </div>
     </div>
     <div id="liveFeed" class="live-feed">${eventRows(state.live.events, false)}</div>

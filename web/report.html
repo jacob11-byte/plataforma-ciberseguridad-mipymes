@@ -54,6 +54,17 @@
 
     function findingHtml(finding) {
       const d = finding.diagnosis || {};
+      const p = d.plain;
+      if (p) {
+        return `
+        <article class="finding sev-${esc(finding.severity)}">
+          <h3><span class="sev">${esc(p.urgency || finding.severity)}</span>${esc(p.title)}</h3>
+          <div class="label">¿Qué pasa?</div><p>${esc(p.what)}</p>
+          <div class="label">¿Por qué importa?</div><p>${esc(p.why)}</p>
+          <div class="label">¿Qué hago? · ${esc(p.who_label)}</div><ol>${(p.steps || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
+          ${d.detail ? `<div class="refs">Detalle técnico: ${esc(d.detail)}${d.fix_command ? ` · Comando: ${esc(d.fix_command)}` : ""}</div>` : ""}
+        </article>`;
+      }
       return `
         <article class="finding sev-${esc(finding.severity)}">
           <h3><span class="sev">${esc(finding.severity)}</span>${esc(finding.title)}</h3>

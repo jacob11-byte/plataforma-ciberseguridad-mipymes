@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
-from . import vulndb
+from . import plain, vulndb
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,7 @@ class RuleResult:
 
     def diagnosis(self) -> dict[str, Any]:
         return {
+            "plain": plain.explain(self.rule_id, self.severity, self.evidence),
             "detail": self.detail,
             "risk": self.risk,
             "steps": list(self.steps),
