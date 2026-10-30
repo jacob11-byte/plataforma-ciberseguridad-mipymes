@@ -14,6 +14,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.outbox import Outbox
+from agent.realtime import EventMonitor, post_events
 from agent.public_status import read_public_status, utc_now, write_public_status
 from agent.windows_agent import (
     AGENT_VERSION,
@@ -102,6 +103,11 @@ def run_service_worker(
         lock.acquire()
         config = load_agent_config(config_path)
         write_public_status(service_status(config, service_state="starting", last_error=None))
+        if not once and config.get("realtime", True):
+            # Shares ``config`` so a rotated token or a fresh registration is
+            # picked up without restarting the monitor.
+            monitor = EventMonitor(config, post_events)
+            threading.Thread(target=monitor.run, args=(stop_event,), name="CyberCheckEvents", daemon=True).start()
         while not stop_event.is_set():
             run_agent_cycle(config, max_tasks=max_tasks)
             if once or stop_event.wait(interval_seconds):

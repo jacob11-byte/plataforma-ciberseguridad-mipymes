@@ -35,7 +35,9 @@ from .accounts import (
     validate_username,
     verify_password,
 )
-from . import alerts
+from . import alerts, vulndb
+from . import kev as kev_catalog
+from . import msrc as msrc_catalog
 from .ai_service import answer_company_question, answer_device_question, company_ai_summary, device_ai_summary
 from .rules import evaluate_rules
 from .storage import connect, generate_device_id, generate_token, hash_agent_token, init_db, insert_returning_id, json_dumps
@@ -160,6 +162,21 @@ class AiChatRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
 
 
+class AgentEvent(BaseModel):
+    event_key: str = Field(min_length=4, max_length=128)
+    event_type: str = Field(min_length=1, max_length=60)
+    severity: str = Field(pattern="^(Critico|Alto|Medio|Bajo|Info)$")
+    title: str = Field(min_length=1, max_length=200)
+    detail: str = Field(default="", max_length=1000)
+    occurred_at: str = Field(min_length=10, max_length=40)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventBatch(BaseModel):
+    device_id: str
+    events: list[AgentEvent] = Field(min_length=1, max_length=100)
+
+
 class ForgotPasswordRequest(BaseModel):
     email: str = Field(min_length=3, max_length=160)
 
@@ -200,6 +217,8 @@ def startup() -> None:
         # Users created before multi-tenancy belong to the original company.
         db.execute("UPDATE users SET company_id=? WHERE company_id IS NULL", (default_company,))
     start_offline_watcher()
+    kev_catalog.start_refresher()
+    msrc_catalog.start_refresher()
 
 
 def _production_mode() -> bool:
@@ -1204,7 +1223,7 @@ def receive_results(
             ):
                 raise HTTPException(status_code=409, detail="La tarea no esta entregada a este equipo")
 
-        rule_results = evaluate_rules(payload.evidence)
+        rule_results = evaluate_rules(payload.evidence, kev=kev_catalog.catalog(), msrc=msrc_catalog.catalog())
         db.execute(
             "UPDATE devices SET last_seen = CURRENT_TIMESTAMP, offline_alerted=? WHERE device_id = ?",
             (False, payload.device_id),
@@ -1346,6 +1365,97 @@ def receive_results(
                 f"{_public_base_url(request)}/devices/{payload.device_id}",
             )
         return {"scan_id": scan_id, "evaluated_rules": len(rule_results), "duplicate": False}
+
+
+EVENTS_KEPT_PER_DEVICE = 3000
+EVENT_EMAIL_INTERVAL_SECONDS = 600
+_event_email_last: dict[str, float] = {}
+
+
+@app.post("/api/agent/events")
+def receive_events(
+    payload: EventBatch, request: Request, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Near-real-time security events pushed by the agent's monitor."""
+    device = _device_for_token(payload.device_id, authorization)
+    accepted: list[AgentEvent] = []
+    with connect() as db:
+        for item in payload.events:
+            data_json = json_dumps(item.data)
+            if len(data_json) > 4000:
+                data_json = json_dumps({"truncated": True})
+            inserted = db.execute(
+                """
+                INSERT INTO device_events(device_id, event_key, event_type, severity, title, detail, data_json, occurred_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device_id, event_key) DO NOTHING
+                """,
+                (payload.device_id, item.event_key, item.event_type, item.severity, item.title,
+                 item.detail, data_json, item.occurred_at),
+            )
+            if inserted.rowcount == 1:
+                accepted.append(item)
+        db.execute(
+            "UPDATE devices SET last_seen=CURRENT_TIMESTAMP, offline_alerted=? WHERE device_id=?",
+            (False, payload.device_id),
+        )
+        # Bound storage per device (offset query works on SQLite and PostgreSQL).
+        cutoff = db.execute(
+            "SELECT id FROM device_events WHERE device_id=? ORDER BY id DESC LIMIT 1 OFFSET ?",
+            (payload.device_id, EVENTS_KEPT_PER_DEVICE),
+        ).fetchone()
+        if cutoff:
+            db.execute("DELETE FROM device_events WHERE device_id=? AND id<=?", (payload.device_id, cutoff["id"]))
+        serious = [
+            {"severity": item.severity, "title": item.title, "detail": item.detail}
+            for item in accepted if item.severity in {"Critico", "Alto"}
+        ]
+        now = time.time()
+        if serious and alerts.smtp_configured() and now - _event_email_last.get(payload.device_id, 0) >= EVENT_EMAIL_INTERVAL_SECONDS:
+            _event_email_last[payload.device_id] = now
+            alerts.notify_async(
+                _alert_recipients(db, device["company_id"]),
+                device.get("name") or payload.device_id,
+                serious,
+                f"{_public_base_url(request)}/devices/{payload.device_id}",
+            )
+    return {"accepted": len(accepted), "duplicates": len(payload.events) - len(accepted)}
+
+
+def _event_view(row: Any) -> dict[str, Any]:
+    event = dict(row)
+    event["data"] = json_loads(event.pop("data_json", None)) or {}
+    event.pop("event_key", None)
+    return event
+
+
+@app.get("/api/events")
+def list_events(
+    request: Request,
+    after_id: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=300),
+    device_id: str | None = None,
+) -> dict[str, Any]:
+    """Live feed for the caller's company, newest first; poll with ``after_id``."""
+    _require_user(request)
+    company_id = _company_id(request)
+    device_filter = "AND e.device_id = ?" if device_id else ""
+    params = (company_id, after_id, *((device_id,) if device_id else ()), limit)
+    with connect() as db:
+        if device_id:
+            _company_device(db, device_id, company_id)
+        rows = db.execute(
+            f"""
+            SELECT e.id, e.device_id, d.name AS device_name, e.event_type, e.severity, e.title, e.detail,
+                e.data_json, e.occurred_at, e.created_at
+            FROM device_events e JOIN devices d ON d.device_id = e.device_id
+            WHERE d.company_id = ? AND e.id > ? {device_filter}
+            ORDER BY e.id DESC LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    events = [_event_view(row) for row in rows]
+    return {"events": events, "latest_id": max((item["id"] for item in events), default=after_id)}
 
 
 @app.get("/api/agent/tasks")
@@ -1560,6 +1670,13 @@ def device_detail(device_id: str, request: Request) -> dict[str, Any]:
                 finding_ids,
             ).fetchall()]
     latest_controls = latest_controls_from_evidences(evidences)
+    software_result = (latest_controls.get("software_inventory") or {}).get("data")
+    vulnerabilities = vulndb.device_vulnerabilities(
+        (latest_controls.get("updates") or {}).get("data"),
+        software_result.get("data") if isinstance(software_result, dict) and software_result.get("success") is True else None,
+        kev_catalog.catalog(),
+        msrc_catalog.catalog(),
+    )
     control_matrix = build_control_matrix(latest_controls, findings)
     latest_scan = scans[0] if scans else None
     latest_full_scan = next((scan for scan in scans if scan["scan_type"] == "FULL_SCAN"), None)
@@ -1582,6 +1699,9 @@ def device_detail(device_id: str, request: Request) -> dict[str, Any]:
             **{f"security_{key}": value for key, value in security_score(findings).items() if key != "open_findings"},
         },
         "collection_issues": collection_issues(latest_controls),
+        "vulnerabilities": vulnerabilities,
+        "kev_loaded": kev_catalog.catalog() is not None,
+        "msrc_loaded": msrc_catalog.catalog() is not None,
         "control_matrix": control_matrix,
         "controls": latest_controls,
         "scans": scans,

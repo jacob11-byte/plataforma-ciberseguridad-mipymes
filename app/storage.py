@@ -194,6 +194,19 @@ CREATE TABLE IF NOT EXISTS enrollment_tokens (
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS device_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL REFERENCES devices(device_id),
+    event_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    data_json TEXT NOT NULL DEFAULT '{}',
+    occurred_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(device_id, event_key)
+);
 CREATE TABLE IF NOT EXISTS password_resets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id),
@@ -373,6 +386,7 @@ def migrate_db(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_audit_created ON admin_audit_log(created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_audit_company ON admin_audit_log(company_id, id)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_devices_company ON devices(company_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_events_device ON device_events(device_id, id)")
     db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_scans_device_request "
         "ON scans(device_id, request_id) WHERE request_id IS NOT NULL"

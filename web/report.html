@@ -105,6 +105,7 @@
         <table>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>
         <h2>Problemas abiertos (${open.length})</h2>
         ${open.length ? open.map(findingHtml).join("") : "<p>No hay problemas abiertos en la ultima evidencia recibida.</p>"}
+        ${(detail.vulnerabilities || []).length ? `<h2>Vulnerabilidades (${detail.vulnerabilities.length})</h2><table>${detail.vulnerabilities.map((v) => `<tr><th>${esc(v.cve || "Sin soporte")}${v.kev ? " · EXPLOTADA" : ""}</th><td>${esc(v.product)}${v.installed ? " " + esc(v.installed) : ""} — ${esc(v.fixed_in ? "corregido en " + v.fixed_in : "sin correccion")}<br><span class="muted">${esc(v.source)}</span></td></tr>`).join("")}</table>` : ""}
         ${issues.length ? `<h2>Controles que no se pudieron verificar</h2><table>${issues.map((i) => `<tr><th>${esc(i.label)}</th><td>${esc(i.error)}<br><span class="muted">${esc(i.hint)}</span></td></tr>`).join("")}</table>` : ""}
         ${resolved.length ? `<h2>Problemas corregidos (${resolved.length})</h2><table>${resolved.map((f) => `<tr><th>${esc(f.title)}</th><td>${esc(f.updated_at)}</td></tr>`).join("")}</table>` : ""}
         <footer>Informe basado en la evidencia tecnica recolectada por el agente CyberCheck. Los hallazgos reflejan el estado del equipo en la fecha de la ultima revision.</footer>`;

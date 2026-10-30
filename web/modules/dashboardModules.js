@@ -3,9 +3,11 @@ import { taskLabels, taskLabel, statusLabel } from "./labels.js";
 import { latestStatusEvidence, renderSecurityStatus } from "./securityStatus.js";
 import { findingCard, latestEvidenceByDeviceAndControl } from "./findings.js";
 import { can, roleLabels } from "./roles.js";
+import { eventRows } from "./events.js";
 
 const allModules = [
   ["computadoras", "Computadoras", "viewer"],
+  ["envivo", "En vivo", "viewer"],
   ["analista", "Analista de evidencia", "viewer"],
   ["estado", "Estado", "viewer"],
   ["problemas", "Problemas", "viewer"],
@@ -22,6 +24,7 @@ export function dashboardModules(user) {
 
 const renderers = {
   computadoras: renderDevicesModule,
+  envivo: renderLiveModule,
   analista: renderAiModule,
   estado: renderSecurityModule,
   problemas: renderFindingsModule,
@@ -56,6 +59,20 @@ function renderDevicesModule(state) {
       </table>
     </div>
     <div id="reconnectNotice" class="notice" hidden></div>
+  `;
+}
+
+function renderLiveModule(state) {
+  const live = state.live;
+  return `
+    <div class="section-title">
+      <div>
+        <h2><span class="live-dot"></span> Actividad en vivo</h2>
+        <p>Eventos de seguridad de todas tus computadoras, actualizados cada pocos segundos.</p>
+      </div>
+      <span class="muted" id="liveCount">${live.events.length} evento(s)</span>
+    </div>
+    <div id="liveFeed" class="live-feed">${eventRows(live.events)}</div>
   `;
 }
 
@@ -245,6 +262,8 @@ const auditLabels = {
   "device.reactivate": "Equipo reactivado",
   "device.rotation_requested": "Rotacion de credencial solicitada",
   "device.credential_rotated": "Credencial del agente renovada",
+  "password.reset": "Contrasena restablecida",
+  "password.reset_requested": "Recuperacion de contrasena solicitada",
   "account.signup": "Cuenta creada",
   "installer.download": "Instalador descargado",
   "installer.revoke": "Instaladores invalidados",

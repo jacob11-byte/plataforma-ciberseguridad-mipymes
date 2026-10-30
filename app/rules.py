@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 
+from . import vulndb
+
 
 @dataclass(frozen=True)
 class RuleResult:
@@ -323,6 +325,26 @@ KNOWLEDGE: dict[str, dict[str, Any]] = {
         "fix": "Stop-Service '<servicio>' -Force; Set-Service '<servicio>' -StartupType Disabled",
         "refs": ["MITRE ATT&CK T1543.003 - Crear servicio de Windows", "MITRE ATT&CK T1569.002 - Ejecucion como servicio"],
     },
+    "VULNERABLE_SOFTWARE": {
+        "risk": "Cada programa instalado con una version anterior a la correccion tiene una falla publica y documentada. Los atacantes automatizan su explotacion: basta con que el usuario abra un archivo o visite una pagina manipulada. Los programas sin soporte ya no recibiran ninguna correccion.",
+        "steps": [
+            "Actualiza cada programa listado a la version indicada (o superior) desde el sitio oficial o con winget.",
+            "Si es un programa sin soporte, desinstalalo y usa una alternativa vigente.",
+            "Tras actualizar, solicita una nueva revision para confirmar que el hallazgo se cierra.",
+        ],
+        "fix": "winget upgrade --all --include-unknown",
+        "refs": ["CIS Control 7.4 - Parches de aplicaciones", "CIS Control 2.2 - Software con soporte", "MITRE ATT&CK T1203 - Explotacion para ejecucion"],
+    },
+    "EXPLOITED_VULN_UNPATCHED": {
+        "risk": "La agencia de ciberseguridad de EE. UU. (CISA) confirmo que estas vulnerabilidades se estan explotando en ataques reales ahora mismo. El parche existe pero este equipo aun no lo instala, asi que es un blanco directo. Es la prioridad numero uno de parcheo.",
+        "steps": [
+            "Instala hoy mismo las actualizaciones de Windows indicadas en el detalle.",
+            "Reinicia el equipo: el parche no protege hasta reiniciar.",
+            "Revisa si el equipo mostro actividad extrana antes del parche (procesos o conexiones desconocidas).",
+        ],
+        "fix": "UsoClient StartInteractiveScan; UsoClient StartDownload; UsoClient StartInstall",
+        "refs": ["CISA Known Exploited Vulnerabilities Catalog", "CIS Control 7.3", "MITRE ATT&CK T1190 - Explotar aplicacion expuesta"],
+    },
 }
 
 
@@ -336,6 +358,7 @@ def make(
     recommendation: str,
     closure_criteria: str,
     detail: str = "",
+    fix_command: str | None = None,
 ) -> RuleResult:
     knowledge = KNOWLEDGE.get(rule_id, {})
     return RuleResult(
@@ -350,7 +373,7 @@ def make(
         detail=detail,
         risk=knowledge.get("risk", ""),
         steps=tuple(knowledge.get("steps", ())),
-        fix_command=knowledge.get("fix"),
+        fix_command=fix_command if fix_command is not None else knowledge.get("fix"),
         references=tuple(knowledge.get("refs", ())),
     )
 
@@ -454,9 +477,17 @@ def _join(items: list[str], limit: int = 5) -> str:
     return "; ".join(shown) + (f" (y {extra} mas)" if extra > 0 else "")
 
 
-def evaluate_rules(evidence: dict[str, Any], today: date | None = None) -> list[RuleResult]:
+def evaluate_rules(
+    evidence: dict[str, Any],
+    today: date | None = None,
+    kev: dict[str, dict[str, Any]] | None = None,
+    msrc: dict[str, Any] | None = None,
+) -> list[RuleResult]:
+    """``kev`` is the CISA catalog (CVE -> info) and ``msrc`` Microsoft's
+    bulletin map; either is None while it is not loaded."""
     today = today or datetime.now(timezone.utc).date()
     results: list[RuleResult] = []
+    results += _vulnerability_rules(evidence, kev, msrc)
     results += _firewall_rules(evidence)
     results += _exposure_rules(evidence)
     results += _admin_rules(evidence)
@@ -469,6 +500,69 @@ def evaluate_rules(evidence: dict[str, Any], today: date | None = None) -> list[
     results += _process_rules(evidence)
     results += _lifecycle_rules(evidence, today)
     results += _detection_rules(evidence)
+    return results
+
+
+def _vulnerability_rules(
+    evidence: dict[str, Any], kev: dict[str, dict[str, Any]] | None, msrc: dict[str, Any] | None
+) -> list[RuleResult]:
+    results: list[RuleResult] = []
+    kev = kev or {}
+    known_exploited = set(kev) | set((msrc or {}).get("exploited", ()))
+    software = _module_data(evidence, "software_inventory")
+    if isinstance(software, list):
+        matches = vulndb.match_software(software)
+        exploited = {cve for match in matches for cve in match["cves"] if cve in known_exploited}
+        parts = []
+        for match in matches:
+            if match["eol"] and not match["cves"]:
+                parts.append(f"{match['product']} {match['installed']} (sin soporte: ya no recibe parches)")
+                continue
+            flagged = [
+                f"{cve} [EXPLOTADA ACTIVAMENTE - {' y '.join(vulndb.exploited_by(cve, kev, msrc))}]"
+                if cve in known_exploited else cve
+                for cve in match["cves"]
+            ]
+            parts.append(
+                f"{match['product']} {match['installed']} (corregido en {match['fixed_in']}): {', '.join(flagged)}"
+            )
+        commands = sorted({f"winget upgrade --id {match['winget_id']}" for match in matches if match["winget_id"]})
+        results.append(make(
+            "VULNERABLE_SOFTWARE", "software_inventory", "Programas con vulnerabilidades conocidas",
+            "Critico" if exploited else "Alto", bool(matches),
+            {"programs": [{"product": match["product"], "installed": match["installed"], "fixed_in": match["fixed_in"],
+                           "eol": match["eol"], "cves": match["cves"]} for match in matches],
+             "exploited_in_wild": sorted(exploited)},
+            "Actualizar o desinstalar los programas vulnerables.", "Ningun programa instalado coincide con una vulnerabilidad conocida.",
+            ("Programas afectados: " + _join(parts, limit=8) + ".") if matches else "",
+            fix_command="\n".join(commands) if commands else None,
+        ))
+
+    updates = evidence.get("updates")
+    # Without any exploitation catalog loaded we cannot say "not exploited", so
+    # the rule is skipped instead of closing an existing finding by mistake.
+    if known_exploited and isinstance(updates, dict) and _available(updates) \
+            and isinstance(updates.get("pending_updates"), list):
+        pending = vulndb.pending_update_cves(updates, msrc)
+        hits = [item for item in pending if item["cve"] in known_exploited]
+        by_kb: dict[str, list[str]] = {}
+        for item in hits:
+            by_kb.setdefault(item["kb"] or "sin KB", []).append(item["cve"])
+        ransomware = sorted({item["cve"] for item in hits if (kev.get(item["cve"]) or {}).get("ransomware")})
+        detail = ""
+        if hits:
+            detail = (
+                "Faltan parches de Windows que corrigen vulnerabilidades explotadas activamente (segun CISA o Microsoft): "
+                + _join([f"{kb} -> {', '.join(sorted(set(cves)))}" for kb, cves in by_kb.items()], limit=6) + "."
+                + (f" Usadas en campanas de ransomware: {', '.join(ransomware)}." if ransomware else "")
+            )
+        results.append(make(
+            "EXPLOITED_VULN_UNPATCHED", "updates", "Parches pendientes de vulnerabilidades explotadas activamente",
+            "Critico", bool(hits),
+            {"exploited_cves": sorted({item["cve"] for item in hits}), "kbs": sorted(by_kb), "ransomware_cves": ransomware},
+            "Instalar de inmediato las actualizaciones de Windows pendientes.",
+            "Ningun parche pendiente corrige vulnerabilidades del catalogo CISA KEV.", detail,
+        ))
     return results
 
 

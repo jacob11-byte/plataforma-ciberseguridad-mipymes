@@ -32,7 +32,7 @@ from agent.modules.security_controls import collect_security_controls
 from agent.modules.software_inventory import collect_installed_software
 from agent.modules.system_inventory import collect_system_inventory
 
-AGENT_VERSION = "0.7.1"
+AGENT_VERSION = "0.8.0"
 LOGGER = logging.getLogger("cybercheck.agent")
 HTTP_TIMEOUT_SECONDS = 60
 HTTP_MAX_ATTEMPTS = 3
@@ -467,9 +467,10 @@ def collect_updates() -> dict[str, Any]:
     pending = run_powershell(
         "$s=New-Object -ComObject Microsoft.Update.Session; "
         "$r=$s.CreateUpdateSearcher().Search(\"IsInstalled=0 and Type='Software' and IsHidden=0\"); "
-        "[pscustomobject]@{ Count = $r.Updates.Count; Items = @($r.Updates | Select-Object -First 15 | ForEach-Object { "
+        "[pscustomobject]@{ Count = $r.Updates.Count; Items = @($r.Updates | Select-Object -First 30 | ForEach-Object { "
         "[pscustomobject]@{ Title = [string]$_.Title; "
         "KB = (@($_.KBArticleIDs) | ForEach-Object { 'KB' + $_ }) -join ','; "
+        "CVEs = (@($_.CveIDs) | ForEach-Object { [string]$_ }) -join ','; "
         "Severity = [string]$_.MsrcSeverity; "
         "Security = [bool](@($_.Categories) | Where-Object { $_.Name -match 'Security|Seguridad' }) } }) "
         "} | ConvertTo-Json -Compress -Depth 4",
@@ -494,6 +495,7 @@ def collect_updates() -> dict[str, Any]:
             {
                 "title": item.get("Title"),
                 "kb": item.get("KB") or None,
+                "cves": [cve.strip() for cve in str(item.get("CVEs") or "").split(",") if cve.strip().upper().startswith("CVE-")],
                 "severity": item.get("Severity") or None,
                 "security": bool(item.get("Security")),
             }

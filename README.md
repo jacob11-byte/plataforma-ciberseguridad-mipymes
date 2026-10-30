@@ -20,6 +20,48 @@ resultados sin conexion, aplicacion de bandeja con estado sanitizado, bloqueo
 contra procesos solapados, tareas con lease e identificador idempotente, y
 estados parciales cuando una consulta no produjo evidencia suficiente.
 
+### Vulnerabilidades (CVE)
+
+Cada equipo muestra una pestana **Vulnerabilidades** con tres fuentes:
+
+- **Parches de Windows pendientes**: el agente lee de Windows Update que KB
+  faltan; el servidor los traduce a CVE con el boletin oficial de Microsoft
+  (MSRC, ultimos 3 meses) porque Windows Update casi nunca informa los CVE de
+  las actualizaciones acumulativas.
+- **Programas instalados con fallas conocidas** y **programas sin soporte**
+  (Flash, Silverlight, QuickTime, Python 2), segun una base curada en
+  `app/vulndb.py` con la version que corrige cada CVE. Es deliberadamente
+  corta: solo incluye entradas verificables. Se amplia con un JSON propio
+  (`VULN_DB_PATH`, ver el formato en `vulndb.entries()`).
+- **Explotacion real**: se marca como "explotada activamente" toda CVE que
+  figure en el catalogo CISA KEV o que Microsoft marque `Exploited:Yes`; esos
+  casos generan hallazgos **criticos**.
+
+Los catalogos se descargan en segundo plano al arrancar y se renuevan cada 24 h;
+mientras no esten cargados el panel lo indica y no afirma que algo "no esta
+explotado". El boletin de Microsoft pesa ~20 MB por mes: el servidor llega a
+~260 MB de pico al procesarlo (usa `MSRC_MONTHS=1` o `MSRC_DISABLED=true` en
+instancias de 512 MB muy justas). Esto detecta vulnerabilidades **conocidas y
+catalogadas**; no es un escaner de vulnerabilidades completo (no prueba
+servicios ni configuraciones de aplicaciones de terceros fuera de la base).
+
+### Monitoreo en tiempo real
+
+El servicio del agente consulta cada 30 s los eventos nuevos y envia al panel,
+en segundos, lo que importa para la seguridad (pestana **En vivo**, tambien por
+equipo): rafagas de inicios de sesion fallidos (fuerza bruta), cuentas creadas,
+cuentas agregadas a Administradores, borrado del registro de seguridad,
+servicios instalados, detecciones y apagado de Defender, procesos nuevos sin
+firma en carpetas de usuario, puertos nuevos abiertos a la red y USB. Los
+eventos graves tambien llegan por correo (maximo uno cada 10 minutos por
+equipo). Tambien aplica `"realtime": false` en la configuracion para apagarlo.
+
+No recolecta titulos de ventanas, tiempo por aplicacion, archivos ni teclas:
+es telemetria de seguridad, no vigilancia de productividad. Los eventos de
+seguridad del registro de Windows requieren ejecutar el agente como servicio
+(SYSTEM). Si el equipo esta sin Internet los eventos esperan en memoria (hasta
+500) y se envian al volver la conexion; no sobreviven a un reinicio.
+
 ### Alertas por correo e informes
 
 Con un servidor SMTP configurado, cada vez que un equipo muestra un problema

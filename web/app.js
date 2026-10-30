@@ -1,9 +1,36 @@
 import { dashboardModules, renderModule } from "/static/modules/dashboardModules.js";
 import { escapeHtml } from "/static/modules/utils.js";
 
+import { eventRows, isSerious } from "/static/modules/events.js";
+
 const state = {
   dashboard: null, ai: null, user: null, users: null, audit: null, install: null, activeModule: "computadoras",
+  live: { events: [], latestId: 0, unseen: 0 },
 };
+
+// Live feed: poll only for events newer than the last one seen.
+async function pollLive() {
+  const response = await fetch(`/api/events?after_id=${state.live.latestId}&limit=100`).catch(() => null);
+  if (!response || !response.ok) return;
+  const data = await response.json();
+  const fresh = data.events || [];
+  const first = state.live.latestId === 0;
+  if (fresh.length) {
+    state.live.events = [...fresh, ...state.live.events].slice(0, 200);
+    state.live.latestId = data.latest_id;
+    if (!first && state.activeModule !== "envivo") {
+      state.live.unseen += fresh.filter(isSerious).length;
+      renderModuleTabs();
+    }
+  }
+  if (state.activeModule === "envivo") {
+    state.live.unseen = 0;
+    const feed = document.getElementById("liveFeed");
+    if (feed) feed.innerHTML = eventRows(state.live.events);
+    const count = document.getElementById("liveCount");
+    if (count) count.textContent = `${state.live.events.length} evento(s)`;
+  }
+}
 
 async function ensureSession() {
   const response = await fetch("/api/me");
@@ -90,11 +117,12 @@ function renderMetrics() {
 
 function renderModuleTabs() {
   document.getElementById("moduleTabs").innerHTML = dashboardModules(state.user).map(([id, label]) => `
-    <button class="tab ${state.activeModule === id ? "active" : ""}" data-module="${id}">${escapeHtml(label)}</button>
+    <button class="tab ${state.activeModule === id ? "active" : ""}" data-module="${id}">${escapeHtml(label)}${id === "envivo" && state.live.unseen ? ` <span class="tab-alert">${state.live.unseen}</span>` : ""}</button>
   `).join("");
   document.querySelectorAll("[data-module]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.activeModule = button.dataset.module;
+      if (state.activeModule === "envivo") state.live.unseen = 0;
       renderActiveModule();
       renderModuleTabs();
       await loadModuleData();
@@ -371,7 +399,12 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 });
 
 ensureSession().then((ok) => {
-  if (ok) loadDashboard();
+  if (!ok) return;
+  loadDashboard();
+  pollLive();
+  setInterval(() => {
+    if (!document.hidden) pollLive();
+  }, 5_000);
 });
 
 setInterval(() => {

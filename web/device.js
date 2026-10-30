@@ -1,10 +1,13 @@
 import { diagnosisBlock } from "/static/modules/findings.js";
+import { eventRows } from "/static/modules/events.js";
 
-const state = { detail: null, ai: null, tab: "resumen" };
+const state = { detail: null, ai: null, tab: "resumen", live: { events: [], latestId: 0 } };
 const severityOrder = { Critico: 0, Alto: 1, Medio: 2, Bajo: 3 };
 
 const tabs = [
   ["resumen", "Resumen"],
+  ["vulnerabilidades", "Vulnerabilidades"],
+  ["envivo", "Actividad en vivo"],
   ["analista", "Analista de evidencia"],
   ["sistema", "Informacion del equipo"],
   ["inventario", "Inventario"],
@@ -223,6 +226,8 @@ async function askDeviceAi(question) {
 function renderTab() {
   const data = state.detail;
   if (state.tab === "resumen") return renderSummary(data);
+  if (state.tab === "vulnerabilidades") return renderVulnerabilities(data);
+  if (state.tab === "envivo") return renderLive();
   if (state.tab === "analista") return renderAiTab();
   if (state.tab === "sistema") return renderObject("Informacion del equipo", controlData("system_info"));
   if (state.tab === "inventario") return renderModuleObject("Inventario avanzado", controlData("system_inventory_v2"));
@@ -441,6 +446,60 @@ function renderFindings(rows) {
   `).join("")}</div>` : `<p class="empty-state">Sin problemas registrados.</p>`;
 }
 
+function renderVulnerabilities(data) {
+  const rows = data.vulnerabilities || [];
+  const exploited = rows.filter((row) => row.kev);
+  const nvd = (cve) => `<a href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(cve)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve)}</a>`;
+  return `
+    <div class="section-title">
+      <div>
+        <h2>Vulnerabilidades detectadas</h2>
+        <p>Parches de Windows pendientes (con sus CVE segun Windows Update), programas instalados con fallas conocidas y programas sin soporte. Se marcan las que ya se explotan en ataques reales (catalogo CISA KEV y boletin de seguridad de Microsoft).</p>
+      </div>
+      <span class="badge ${exploited.length ? "Critico" : "ok"}">${rows.length} en total · ${exploited.length} explotadas activamente</span>
+    </div>
+    ${data.kev_loaded || data.msrc_loaded ? "" : `<div class="notice">Los catalogos de explotacion (CISA KEV y boletin de Microsoft) aun no estan cargados en el servidor; no se puede afirmar cuales vulnerabilidades se estan explotando.</div>`}
+    ${rows.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>CVE</th><th>Producto</th><th>Instalado</th><th>Corregido en</th><th>Origen</th><th>Estado</th></tr></thead>
+      <tbody>${rows.map((row) => `
+        <tr class="${row.kev ? "kev-row" : ""}">
+          <td>${row.cve ? nvd(row.cve) : "Sin CVE (sin soporte)"}<div class="muted">${escapeHtml(row.summary || "")}</div></td>
+          <td>${escapeHtml(row.product || "")}</td>
+          <td>${escapeHtml(row.installed || "-")}</td>
+          <td>${escapeHtml(row.fixed_in || "sin correccion")}</td>
+          <td>${escapeHtml(row.source)}</td>
+          <td>${row.kev ? `<span class="badge Critico">EXPLOTADA ACTIVAMENTE</span> <span class="muted">${escapeHtml((row.exploited_by || []).join(" + "))}</span>${row.ransomware ? ` <span class="badge Alto">ransomware</span>` : ""}` : `<span class="muted">sin explotacion conocida</span>`}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>` : `<p class="empty-state">No se detectaron vulnerabilidades conocidas en la ultima evidencia. Esto cubre parches de Windows pendientes y los programas de la base curada; no sustituye un escaneo de vulnerabilidades completo.</p>`}
+  `;
+}
+
+async function pollDeviceLive() {
+  if (state.tab !== "envivo" || document.hidden) return;
+  const response = await fetch(`/api/events?device_id=${encodeURIComponent(deviceIdFromPath())}&after_id=${state.live.latestId}&limit=100`).catch(() => null);
+  if (!response || !response.ok) return;
+  const data = await response.json();
+  if (data.events.length) {
+    state.live.events = [...data.events, ...state.live.events].slice(0, 200);
+    state.live.latestId = data.latest_id;
+  }
+  const feed = document.getElementById("liveFeed");
+  if (feed) feed.innerHTML = eventRows(state.live.events, false);
+}
+
+function renderLive() {
+  pollDeviceLive();
+  return `
+    <div class="section-title">
+      <div>
+        <h2><span class="live-dot"></span> Actividad en vivo de este equipo</h2>
+        <p>Intentos de acceso, cuentas y servicios nuevos, amenazas de Defender, procesos sin firma, puertos y USB; se actualiza cada 5 segundos.</p>
+      </div>
+    </div>
+    <div id="liveFeed" class="live-feed">${eventRows(state.live.events, false)}</div>
+  `;
+}
+
 function renderDetections(rows) {
   const events = Array.isArray(rows) ? rows : [];
   if (!rows) return noEvaluado("Detecciones");
@@ -598,5 +657,7 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 });
 
 ensureSession().then((ok) => {
-  if (ok) loadDetail();
+  if (!ok) return;
+  loadDetail();
+  setInterval(pollDeviceLive, 5_000);
 });
