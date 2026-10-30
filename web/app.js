@@ -453,6 +453,19 @@ async function rotateCredential(deviceId) {
   }
 }
 
+// Links such as /#problemas also work while the panel is already open.
+window.addEventListener("hashchange", async () => {
+  const target = window.location.hash.slice(1);
+  if (!state.user || !state.dashboard || target === state.activeModule) return;
+  if (!dashboardModules(state.user).some(([id]) => id === target)) return;
+  state.activeModule = target;
+  if (target === "envivo") state.live.unseen = 0;
+  renderModuleTabs();
+  renderActiveModule();
+  await loadModuleData();
+  renderActiveModule();
+});
+
 document.getElementById("refreshBtn").addEventListener("click", loadDashboard);
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
