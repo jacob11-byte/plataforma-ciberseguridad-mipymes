@@ -17,6 +17,10 @@ if ($LASTEXITCODE -ne 0) {
 
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $work = Join-Path $projectRoot "tmp\pyinstaller"
+$iconPath = Join-Path $projectRoot "agent\assets\cybercheck.ico"
+if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
+    throw "No existe el icono de la aplicacion: $iconPath"
+}
 New-Item -ItemType Directory -Force -Path $output, $work | Out-Null
 
 Push-Location $projectRoot
@@ -32,6 +36,7 @@ try {
             --clean `
             --onefile `
             --windowed `
+            --icon $iconPath `
             --name $artifact.Name `
             --paths $projectRoot `
             --distpath $output `
@@ -78,6 +83,7 @@ try {
         --onefile `
         --windowed `
         --uac-admin `
+        --icon $iconPath `
         --name CyberCheckSetup `
         --paths $projectRoot `
         --distpath $output `

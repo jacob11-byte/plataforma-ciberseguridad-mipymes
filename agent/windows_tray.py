@@ -14,6 +14,13 @@ from agent.outbox import default_data_root
 from agent.public_status import read_public_status
 
 
+# PyInstaller stores the icon passed with --icon as resource 1 in the
+# executable. Keep the Windows shield only as a defensive fallback for old or
+# manually-built binaries that do not contain the CyberCheck resource.
+APPLICATION_ICON_RESOURCE_ID = 1
+FALLBACK_ICON_RESOURCE_ID = 32518
+
+
 def status_summary(status: dict[str, Any]) -> str:
     service = status.get("service_state", "unknown")
     connectivity = status.get("connectivity", "unknown")
@@ -127,6 +134,14 @@ class WindowsTray:
     def _tooltip(self) -> str:
         return ("CyberCheck - " + status_summary(read_public_status(self.data_root)))[:127]
 
+    def _load_application_icon(self, instance: int) -> int:
+        resource = ctypes.cast(ctypes.c_void_p(APPLICATION_ICON_RESOURCE_ID), self.wintypes.LPCWSTR)
+        icon = self.user32.LoadIconW(instance, resource)
+        if icon:
+            return icon
+        fallback = ctypes.cast(ctypes.c_void_p(FALLBACK_ICON_RESOURCE_ID), self.wintypes.LPCWSTR)
+        return self.user32.LoadIconW(None, fallback)
+
     def _update_icon(self, add: bool = False) -> None:
         if not self.icon_data:
             return
@@ -196,9 +211,7 @@ class WindowsTray:
         window_class = self.WindowClass()
         window_class.lpfnWndProc = wndproc
         window_class.hInstance = instance
-        window_class.hIcon = self.user32.LoadIconW(
-            None, ctypes.cast(ctypes.c_void_p(32518), wt.LPCWSTR)
-        )
+        window_class.hIcon = self._load_application_icon(instance)
         window_class.lpszClassName = self.class_name
         atom = self.user32.RegisterClassW(ctypes.byref(window_class))
         if not atom and ctypes.get_last_error() != 1410:
