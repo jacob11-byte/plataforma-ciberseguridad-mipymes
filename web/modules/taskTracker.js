@@ -9,6 +9,18 @@ const PICKUP_SECONDS = 60;    // the agent asks for work about once a minute
 const STALE_SECONDS = 600;    // finished long ago: don't pop up after a reload
 const STEPS = ["Enviada", "Recibida", "Revisando", "Lista"];
 
+function virusHtml(position) {
+  return `<span class="task-virus task-virus-${position}" aria-hidden="true">
+    <svg viewBox="0 0 32 32" focusable="false">
+      <g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <path d="M16 2v5M16 25v5M2 16h5M25 16h5M6 6l4 4M22 22l4 4M26 6l-4 4M10 22l-4 4"/>
+      </g>
+      <g fill="currentColor"><circle cx="16" cy="2" r="2"/><circle cx="16" cy="30" r="2"/><circle cx="2" cy="16" r="2"/><circle cx="30" cy="16" r="2"/><circle cx="5.8" cy="5.8" r="1.8"/><circle cx="26.2" cy="26.2" r="1.8"/><circle cx="26.2" cy="5.8" r="1.8"/><circle cx="5.8" cy="26.2" r="1.8"/><circle cx="16" cy="16" r="9"/></g>
+      <g class="task-virus-detail"><circle cx="12.5" cy="14" r="1.5"/><circle cx="19.5" cy="17.5" r="1.2"/><circle cx="14" cy="20" r="1"/></g>
+    </svg>
+  </span>`;
+}
+
 function stored() {
   try { return JSON.parse(localStorage.getItem(STORE) || "[]").filter(Number.isInteger); } catch (_error) { return []; }
 }
@@ -50,7 +62,16 @@ export function createTaskTracker({ onCompleted, describeResult, onViewProblems 
         <span class="task-time">0:00</span>
         <button type="button" class="task-close" title="Ocultar (la revisión sigue en la computadora)" aria-label="Ocultar">&times;</button>
       </div>
-      <div class="task-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+      <div class="task-defense" role="progressbar" aria-label="Progreso de la revisión" aria-valuemin="0" aria-valuemax="100">
+        <span class="task-defense-grid" aria-hidden="true"></span>
+        ${virusHtml("one")}${virusHtml("two")}${virusHtml("three")}${virusHtml("four")}
+        <span class="task-impact" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="task-defense-core" aria-hidden="true">
+          <span class="task-defense-ring"></span>
+          <img class="task-defense-shield" src="/static/brand/shield.svg" alt="">
+        </span>
+        <span class="task-defense-progress"><strong>2%</strong><small>Preparando defensa</small></span>
+      </div>
       <ol class="task-steps">${STEPS.map((step) => `<li>${step}</li>`).join("")}</ol>
       <p class="task-note" hidden></p>
       <div class="task-result" hidden></div>`;
@@ -125,6 +146,7 @@ export function createTaskTracker({ onCompleted, describeResult, onViewProblems 
     card.classList.toggle("is-done", data.status === "completed");
     card.classList.toggle("is-failed", failed);
     card.classList.toggle("is-indeterminate", offline);
+    card.dataset.taskStatus = data.status;
     card.querySelector(".task-title").textContent = `${taskLabel(data.task_type)} · ${data.device_name}`;
 
     const phase = {
@@ -139,9 +161,18 @@ export function createTaskTracker({ onCompleted, describeResult, onViewProblems 
     const elapsed = entry.finished ? null : (data.waiting_seconds ?? 0) + extra;
     card.querySelector(".task-time").textContent = elapsed == null ? "" : clock(elapsed);
 
-    const bar = card.querySelector(".task-bar");
-    bar.setAttribute("aria-valuenow", String(Math.round(percent)));
-    bar.querySelector("span").style.width = `${percent.toFixed(1)}%`;
+    const defense = card.querySelector(".task-defense");
+    const roundedPercent = Math.round(percent);
+    defense.setAttribute("aria-valuenow", String(roundedPercent));
+    defense.style.setProperty("--task-angle", `${Math.max(3, percent * 3.6).toFixed(1)}deg`);
+    defense.querySelector("strong").textContent = `${roundedPercent}%`;
+    defense.querySelector("small").textContent = offline
+      ? "Esperando conexión"
+      : data.status === "completed"
+        ? "Equipo protegido"
+        : failed
+          ? "Revisión interrumpida"
+          : data.status === "delivered" ? "Neutralizando amenazas" : "Preparando defensa";
 
     card.querySelectorAll(".task-steps li").forEach((item, index) => {
       item.classList.toggle("done", index < step || data.status === "completed");

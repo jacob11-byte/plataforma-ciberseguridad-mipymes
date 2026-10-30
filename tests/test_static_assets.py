@@ -34,6 +34,16 @@ class StaticAssetsTest(unittest.TestCase):
             html = (main.WEB_DIR / page).read_text(encoding="utf-8")
             self.assertLess(html.index("/static/modules/theme.js"), html.index("/static/styles.css"), page)
 
+    def test_review_progress_uses_the_animated_cybercheck_defense(self):
+        tracker = (main.WEB_DIR / "modules" / "taskTracker.js").read_text(encoding="utf-8")
+        styles = (main.WEB_DIR / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('class="task-defense"', tracker)
+        self.assertIn('/static/brand/shield.svg', tracker)
+        self.assertGreaterEqual(tracker.count('virusHtml('), 5)
+        self.assertIn("@keyframes task-virus-attack", styles)
+        self.assertIn("prefers-reduced-motion: reduce", styles)
+        self.assertNotIn('class="task-bar"', tracker)
+
 
 if __name__ == "__main__":
     unittest.main()

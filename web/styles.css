@@ -1160,27 +1160,105 @@ tr.kev-row { background: var(--bad-soft); }
 .task-card.is-failed .task-state { background: var(--bad-line); }
 .task-card.is-failed .task-state::after { content: "!"; color: #ffffff; font-size: 13px; font-weight: 800; }
 
-.task-bar { position: relative; height: 8px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
-.task-bar > span {
+.task-defense {
+  --task-angle: 8deg;
   position: relative;
-  display: block;
-  width: 2%;
-  height: 100%;
+  display: grid;
+  min-height: 122px;
+  place-items: center;
   overflow: hidden;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--teal), var(--primary));
-  transition: width 1s linear;
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 50% 54%, var(--primary-soft) 0, transparent 42%),
+    linear-gradient(145deg, var(--surface-2), var(--surface));
+  isolation: isolate;
 }
-.task-card.is-running .task-bar > span::after {
-  content: "";
+.task-defense-grid {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
-  animation: task-shimmer 1.6s ease-in-out infinite;
+  z-index: -1;
+  opacity: .22;
+  background-image:
+    linear-gradient(90deg, transparent 49%, var(--primary) 50%, transparent 51%),
+    linear-gradient(transparent 49%, var(--primary) 50%, transparent 51%);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(circle at center, #000, transparent 74%);
 }
-.task-card.is-indeterminate .task-bar > span { width: 35% !important; transition: none; animation: task-slide 1.6s ease-in-out infinite; }
-.task-card.is-done .task-bar > span { background: var(--ok-line); }
-.task-card.is-failed .task-bar > span { background: var(--bad-line); }
+.task-defense-core { position: relative; display: grid; width: 86px; height: 86px; place-items: center; }
+.task-defense-core::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--teal) 18%, transparent), transparent 70%);
+  animation: task-shield-field 1.8s ease-in-out infinite;
+}
+.task-defense-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from -90deg, var(--teal) 0deg, var(--primary) var(--task-angle), var(--surface-3) var(--task-angle));
+  mask: radial-gradient(circle, transparent 59%, #000 61%);
+  transition: background 1s linear;
+}
+.task-defense-shield {
+  position: relative;
+  width: 62px;
+  height: 62px;
+  filter: drop-shadow(0 7px 8px rgba(12, 40, 86, .24));
+  animation: task-shield-breathe 1.8s ease-in-out infinite;
+}
+.task-defense-progress {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  display: grid;
+  justify-items: end;
+  line-height: 1.15;
+}
+.task-defense-progress strong { color: var(--primary); font-family: var(--font-mono); font-size: 15px; }
+.task-defense-progress small { color: var(--muted); font-size: 10.5px; }
+
+.task-virus {
+  --hit-x: 0px;
+  --hit-y: 0px;
+  --bounce-x: 0px;
+  --bounce-y: 0px;
+  --virus-duration: 2.7s;
+  position: absolute;
+  width: 23px;
+  height: 23px;
+  color: #ed5d68;
+  filter: drop-shadow(0 3px 3px rgba(126, 24, 38, .2));
+  opacity: 0;
+  animation: task-virus-attack var(--virus-duration) ease-in-out infinite;
+}
+.task-virus svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.task-virus-detail { fill: #9f2639; }
+.task-virus-one { top: 13px; left: 17px; --hit-x: 133px; --hit-y: 27px; --bounce-x: 94px; --bounce-y: 4px; }
+.task-virus-two { top: 10px; right: 19px; --hit-x: -132px; --hit-y: 30px; --bounce-x: -95px; --bounce-y: 3px; --virus-duration: 3.1s; animation-delay: -.8s; }
+.task-virus-three { bottom: 17px; left: 35px; --hit-x: 116px; --hit-y: -25px; --bounce-x: 80px; --bounce-y: -3px; --virus-duration: 3.3s; animation-delay: -1.6s; }
+.task-virus-four { right: 43px; bottom: 13px; --hit-x: -109px; --hit-y: -27px; --bounce-x: -75px; --bounce-y: -2px; --virus-duration: 2.9s; animation-delay: -2.2s; }
+
+.task-impact { position: absolute; top: 51%; left: 50%; width: 94px; height: 82px; pointer-events: none; transform: translate(-50%, -50%); }
+.task-impact i { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--teal); opacity: 0; animation: task-impact 1.25s ease-out infinite; }
+.task-impact i:nth-child(1) { top: 18px; left: 4px; }
+.task-impact i:nth-child(2) { top: 8px; right: 12px; animation-delay: -.4s; }
+.task-impact i:nth-child(3) { right: 2px; bottom: 14px; animation-delay: -.8s; }
+
+.task-card[data-task-status="pending"] .task-virus { animation-duration: 3.8s; }
+.task-card.is-indeterminate .task-virus, .task-card.is-indeterminate .task-defense-shield,
+.task-card.is-failed .task-virus { animation-play-state: paused; }
+.task-card.is-indeterminate .task-defense { filter: saturate(.55); }
+.task-card.is-done .task-virus, .task-card.is-done .task-impact { display: none; }
+.task-card.is-done .task-defense { border-color: var(--ok-border); background: radial-gradient(circle at 50% 54%, var(--ok-soft), transparent 44%), var(--surface-2); }
+.task-card.is-done .task-defense-ring { background: var(--ok-line); }
+.task-card.is-done .task-defense-shield { animation: task-shield-success .55s ease-out both; }
+.task-card.is-done .task-defense-progress strong { color: var(--ok); }
+.task-card.is-failed .task-defense { border-color: var(--bad-border); }
+.task-card.is-failed .task-defense-ring { background: var(--bad-line); }
+.task-card.is-failed .task-defense-progress strong { color: var(--bad); }
 
 .task-steps { display: flex; gap: 6px; margin: 0; padding: 0; color: var(--muted); font-size: 11.5px; list-style: none; }
 .task-steps li { display: flex; flex: 1; align-items: center; gap: 5px; min-width: 0; }
@@ -1196,8 +1274,21 @@ tr.kev-row { background: var(--bad-soft); }
 
 @keyframes task-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes task-spin { to { transform: rotate(360deg); } }
-@keyframes task-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
-@keyframes task-slide { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
+@keyframes task-shield-breathe { 0%, 100% { transform: scale(.96); } 50% { transform: scale(1.04); } }
+@keyframes task-shield-field { 0%, 100% { opacity: .45; transform: scale(.9); } 50% { opacity: .9; transform: scale(1.12); } }
+@keyframes task-shield-success { 0% { transform: scale(.8); opacity: .4; } 65% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
+@keyframes task-virus-attack {
+  0% { opacity: 0; transform: translate3d(0, 0, 0) rotate(0) scale(.45); }
+  14% { opacity: .95; }
+  54% { opacity: 1; transform: translate3d(var(--hit-x), var(--hit-y), 0) rotate(150deg) scale(1); }
+  61% { opacity: .45; transform: translate3d(var(--bounce-x), var(--bounce-y), 0) rotate(205deg) scale(.62); }
+  100% { opacity: 0; transform: translate3d(0, 0, 0) rotate(280deg) scale(.35); }
+}
+@keyframes task-impact {
+  0%, 43% { opacity: 0; transform: scale(.2); box-shadow: 0 0 0 0 var(--teal); }
+  54% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 4px transparent; }
+  70%, 100% { opacity: 0; transform: translateY(-8px) scale(.4); }
+}
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
